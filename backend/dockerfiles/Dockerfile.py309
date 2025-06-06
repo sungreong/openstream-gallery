@@ -1,0 +1,61 @@
+# Python 3.9 데이터사이언스 베이스 Dockerfile
+# 데이터사이언스 패키지가 많은 앱용 베이스 이미지
+
+FROM python:3.9
+
+# 메타데이터
+LABEL maintainer="Streamlit Platform"
+LABEL base.version="python3.9"
+LABEL base.type="datascience"
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 시스템 의존성 설치 (데이터 사이언스 패키지용)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    gfortran \
+    libopenblas-dev \
+    liblapack-dev \
+    libhdf5-dev \
+    libhdf5-serial-dev \
+    pkg-config \
+    curl \
+    wget \
+    git \
+    procps \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# pip 및 빌드 도구 업그레이드
+RUN pip install --upgrade pip setuptools wheel cython
+
+# 환경 설정
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONUNBUFFERED=1
+
+# 기본 수치 계산 라이브러리 미리 설치 (wheel 버전 사용)
+RUN pip install --no-cache-dir --only-binary=all \
+    numpy \
+    pandas \
+    scipy
+# Streamlit 설치
+RUN pip install --no-cache-dir streamlit==1.45.0
+
+# 포트 노출
+EXPOSE 8501
+
+# 헬스체크 설정 (데이터사이언스 앱은 시작이 오래 걸릴 수 있음)
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+    CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+
+# 실행 사용자 설정
+RUN useradd -m -u 1000 streamlit && \
+    chown -R streamlit:streamlit /app
+
+# 기본 실행 명령어
+CMD ["streamlit", "hello"]

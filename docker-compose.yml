@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 데이터베이스
+  postgres:
+    image: postgres:15
+    container_name: streamlit_platform_db
+    environment:
+      POSTGRES_DB: streamlit_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - streamlit_network
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # FastAPI 백엔드
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: streamlit_platform_backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/streamlit_platform
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_NETWORK_NAME: open-streamlit-gallery_streamlit_network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - app_storage:/app/storage
+      - ./nginx/conf.d/dynamic:/app/nginx_config
+      - ./backend/dockerfiles:/app/dockerfiles:ro
+    networks:
+      - streamlit_network
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    privileged: true
+    user: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # React 프론트엔드
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: streamlit_platform_frontend
+    environment:
+      REACT_APP_API_URL: ""
+    networks:
+      - streamlit_network
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Redis (Celery 브로커)
+  redis:
+    image: redis:7-alpine
+    container_name: streamlit_platform_redis
+    networks:
+      - streamlit_network
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: streamlit_platform_celery_worker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/streamlit_platform
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_NETWORK_NAME: open-streamlit-gallery_streamlit_network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - app_storage:/app/storage
+      - ./nginx/conf.d/dynamic:/app/nginx_config
+      - ./backend/dockerfiles:/app/dockerfiles:ro
+    networks:
+      - streamlit_network
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    privileged: true
+    user: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+
+  # Celery Beat (스케줄러)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: streamlit_platform_celery_beat
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/streamlit_platform
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - app_storage:/app/storage
+    networks:
+      - streamlit_network
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    command: celery -A app.celery_app beat --loglevel=info
+
+  # Nginx 리버스 프록시
+  nginx:
+    image: nginx:alpine
+    container_name: streamlit_platform_nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      - streamlit_network
+    ports:
+      - "1234:80"
+      - "443:443"
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  app_storage:
+  redis_data:
+
+networks:
+  streamlit_network:
+    driver: bridge 

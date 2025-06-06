@@ -1,0 +1,101 @@
+FROM python:3.10
+
+# 메타데이터
+LABEL app.main_file="app.py"
+LABEL app.created="2025-06-06 01:54:22"
+LABEL app.requirements_count="9"
+LABEL app.problematic_packages="2"
+LABEL maintainer="Streamlit Platform"
+LABEL base.version="python3.10"
+LABEL base.type="datascience"
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 시스템 의존성 설치 (데이터 사이언스 패키지용)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    gfortran \
+    libopenblas-dev \
+    liblapack-dev \
+    libhdf5-dev \
+    libhdf5-serial-dev \
+    pkg-config \
+    curl \
+    wget \
+    git \
+    procps \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# pip 및 빌드 도구 업그레이드
+RUN pip install --upgrade pip setuptools wheel cython
+
+# 환경 설정
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONUNBUFFERED=1
+
+# 기본 수치 계산 라이브러리 먼저 설치 (안정적인 버전)
+RUN pip install --no-cache-dir \
+    numpy==1.24.3 \
+    pandas==2.0.3 \
+    scipy==1.11.1
+
+# Streamlit 설치
+RUN pip install --no-cache-dir streamlit==1.28.1
+
+# 포트 노출
+EXPOSE 8501
+
+# 헬스체크 설정 (데이터사이언스 앱은 시작이 오래 걸릴 수 있음)
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+    CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+
+# 실행 사용자 설정
+RUN useradd -m -u 1000 streamlit && \
+    chown -R streamlit:streamlit /app
+
+# 기본 실행 명령어
+CMD ["streamlit", "hello"]
+
+
+
+# 앱별 의존성 설치
+COPY requirements.txt .
+
+# 컴파일이 필요한 패키지들을 먼저 설치
+RUN echo "🔧 컴파일 패키지 설치 시작..." && \
+    pip install --no-cache-dir "numpy==1.21.0" && \    pip install --no-cache-dir "pandas==1.3.0" && \
+    echo "✅ 컴파일 패키지 설치 완료"
+
+# 나머지 의존성 설치 (에러 처리 포함)
+RUN pip install --no-cache-dir -r requirements.txt || \
+    (echo "⚠️ requirements.txt 일괄 설치 실패, 개별 설치 시도..." && \
+     while IFS= read -r requirement; do \
+         if [ -n "$requirement" ] && [ "${requirement#\#}" = "$requirement" ]; then \
+             echo "📦 Installing: $requirement"; \
+             pip install --no-cache-dir "$requirement" || echo "❌ Failed: $requirement"; \
+         fi; \
+     done < requirements.txt)
+
+# 애플리케이션 파일 복사
+COPY . .
+
+# 불필요한 파일 제거
+RUN find . -name "*.pyc" -delete && \
+    find . -name "__pycache__" -type d -exec rm -rf {} + || true
+
+# 실행 사용자로 전환
+USER streamlit
+
+# 실행 명령어
+ENTRYPOINT ["streamlit", "run", "app.py", \
+    "--server.port=8501", \
+    "--server.address=0.0.0.0", \
+    "--server.headless=true", \
+    "--server.enableCORS=false", \
+    "--server.enableXsrfProtection=false"]

@@ -1,0 +1,264 @@
+{
+  "info": {
+    "name": "Streamlit Platform API",
+    "description": "백엔드 API 테스트 컬렉션",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "appId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": ["{{baseUrl}}"],
+          "path": [""]
+        }
+      }
+    },
+    {
+      "name": "2. API Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "health"]
+        }
+      }
+    },
+    {
+      "name": "3. User Registration",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"test@example.com\",\n  \"password\": \"testpassword123\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/register",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "register"]
+        }
+      }
+    },
+    {
+      "name": "4. User Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    const response = pm.response.json();",
+              "    pm.collectionVariables.set('token', response.access_token);",
+              "    console.log('Token saved:', response.access_token);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "username",
+              "value": "testuser"
+            },
+            {
+              "key": "password",
+              "value": "testpassword123"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "5. Get Current User",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "me"]
+        }
+      }
+    },
+    {
+      "name": "6. Create App",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    const response = pm.response.json();",
+              "    pm.collectionVariables.set('appId', response.id);",
+              "    console.log('App ID saved:', response.id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"ZoneCleaner Test App\",\n  \"description\": \"GitHub에서 가져온 테스트 앱\",\n  \"git_url\": \"https://github.com/sungreong/ZoneCleaner\",\n  \"branch\": \"main\",\n  \"main_file\": \"app.py\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", ""]
+        }
+      }
+    },
+    {
+      "name": "7. Get Apps",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", ""]
+        }
+      }
+    },
+    {
+      "name": "8. Deploy App",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"git_url\": \"https://github.com/sungreong/ZoneCleaner\",\n  \"branch\": \"main\",\n  \"main_file\": \"app.py\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/{{appId}}/deploy",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", "{{appId}}", "deploy"]
+        }
+      }
+    },
+    {
+      "name": "9. Get App Detail",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/{{appId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", "{{appId}}"]
+        }
+      }
+    },
+    {
+      "name": "10. Get App Logs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/{{appId}}/logs",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", "{{appId}}", "logs"]
+        }
+      }
+    },
+    {
+      "name": "11. Stop App",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/apps/{{appId}}/stop",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "apps", "{{appId}}", "stop"]
+        }
+      }
+    }
+  ]
+} 
