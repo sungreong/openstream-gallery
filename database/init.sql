@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS apps (
     custom_dockerfile_commands TEXT, -- 사용자 정의 Docker 명령어들
     status VARCHAR(20) DEFAULT 'stopped', -- stopped, building, running, error, deploying, stopping
     container_id VARCHAR(100),
+    container_name VARCHAR(100), -- 실제 Docker 컨테이너 이름
     image_name VARCHAR(200),
     port INTEGER,
     subdomain VARCHAR(100) UNIQUE,

@@ -5,6 +5,8 @@ import asyncio
 import uuid
 import re
 import os
+import subprocess
+from datetime import datetime
 
 from database import get_db
 from models import User, App, Deployment, AppEnvVar, GitCredential
@@ -151,6 +153,7 @@ async def deploy_app_background(app_id: int, db: Session, env_vars: dict = None)
         logger.info("📝 앱 정보 업데이트 중...")
         app.status = "running"
         app.container_id = container_id
+        app.container_name = container_name
         app.port = port
         app.last_deployed_at = deployment.deployed_at
 
@@ -709,3 +712,218 @@ async def get_docker_app_by_id(app_id: int, current_user: User = Depends(get_cur
     except Exception as e:
         logger.error(f"Docker 앱 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Docker 앱 조회 실패: {str(e)}")
+
+
+@router.get("/{app_id}/realtime-status")
+async def get_app_realtime_status(
+    app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """앱의 실시간 상태 확인 (컨테이너 + Nginx + 접근성)"""
+    app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    if not app:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+
+    # 기본 상태 정보
+    status_info = {
+        "app_id": app_id,
+        "db_status": app.status,
+        "container_name": app.container_name,
+        "container_id": app.container_id,
+        "subdomain": app.subdomain,
+        "container_exists": False,
+        "container_running": False,
+        "nginx_config_exists": False,
+        "nginx_config_valid": False,
+        "app_accessible": False,
+        "actual_status": "unknown",
+        "issues": [],
+    }
+
+    try:
+        # 1. 컨테이너 상태 확인
+        if app.container_name:
+            try:
+                # 컨테이너 존재 여부 확인
+                container_check = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", f"name={app.container_name}", "--format", "{{.Names}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if container_check.returncode == 0:
+                    containers = container_check.stdout.strip().split("\n")
+                    status_info["container_exists"] = app.container_name in containers
+
+                # 컨테이너 실행 상태 확인
+                if status_info["container_exists"]:
+                    running_check = subprocess.run(
+                        ["docker", "ps", "--filter", f"name={app.container_name}", "--format", "{{.Names}}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if running_check.returncode == 0:
+                        running_containers = running_check.stdout.strip().split("\n")
+                        status_info["container_running"] = app.container_name in running_containers
+                else:
+                    status_info["issues"].append("컨테이너가 존재하지 않음")
+
+            except Exception as e:
+                logger.error(f"컨테이너 상태 확인 실패: {str(e)}")
+                status_info["issues"].append(f"컨테이너 상태 확인 실패: {str(e)}")
+
+        # 2. Nginx 설정 상태 확인
+        if app.subdomain:
+            try:
+                from services.nginx_service import NginxService
+
+                nginx_service = NginxService()
+
+                # Nginx 설정 파일 존재 여부
+                config_file = os.path.join(nginx_service.config_dir, f"{app.subdomain}.conf")
+                status_info["nginx_config_exists"] = os.path.exists(config_file)
+
+                if status_info["nginx_config_exists"]:
+                    # 설정 파일 유효성 검사
+                    config_status = await nginx_service.get_app_config_status(app.subdomain)
+                    status_info["nginx_config_valid"] = config_status.get("valid", False)
+                    if not status_info["nginx_config_valid"]:
+                        status_info["issues"].extend(config_status.get("issues", []))
+                else:
+                    status_info["issues"].append("Nginx 설정 파일이 없음")
+
+            except Exception as e:
+                logger.error(f"Nginx 설정 확인 실패: {str(e)}")
+                status_info["issues"].append(f"Nginx 설정 확인 실패: {str(e)}")
+
+        # 3. 앱 접근성 확인 (HTTP 요청)
+        if status_info["container_running"] and status_info["nginx_config_valid"]:
+            try:
+                import requests
+
+                app_url = get_app_url(app.subdomain)
+
+                # 간단한 HEAD 요청으로 접근성 확인 (타임아웃 5초)
+                response = requests.head(app_url, timeout=5, allow_redirects=True)
+                status_info["app_accessible"] = response.status_code < 500
+
+                if not status_info["app_accessible"]:
+                    status_info["issues"].append(f"앱 접근 불가 (HTTP {response.status_code})")
+
+            except requests.exceptions.Timeout:
+                status_info["issues"].append("앱 응답 시간 초과")
+            except requests.exceptions.ConnectionError:
+                status_info["issues"].append("앱 연결 실패")
+            except Exception as e:
+                logger.error(f"앱 접근성 확인 실패: {str(e)}")
+                status_info["issues"].append(f"접근성 확인 실패: {str(e)}")
+
+        # 4. 실제 상태 판정
+        if status_info["container_running"] and status_info["nginx_config_valid"] and status_info["app_accessible"]:
+            status_info["actual_status"] = "running"
+        elif status_info["container_exists"] and not status_info["container_running"]:
+            status_info["actual_status"] = "stopped"
+        elif not status_info["container_exists"]:
+            status_info["actual_status"] = "not_deployed"
+        elif status_info["container_running"] and not status_info["nginx_config_valid"]:
+            status_info["actual_status"] = "nginx_error"
+        elif (
+            status_info["container_running"]
+            and status_info["nginx_config_valid"]
+            and not status_info["app_accessible"]
+        ):
+            status_info["actual_status"] = "app_error"
+        else:
+            status_info["actual_status"] = "error"
+
+        # 5. 데이터베이스 상태와 실제 상태가 다른 경우 동기화
+        if status_info["actual_status"] != app.status:
+            logger.info(f"앱 {app_id} 상태 불일치 감지: DB={app.status}, 실제={status_info['actual_status']}")
+
+            # 특정 상태만 자동 동기화 (안전한 상태 변경만)
+            if (app.status == "running" and status_info["actual_status"] in ["stopped", "error"]) or (
+                app.status == "stopped" and status_info["actual_status"] == "not_deployed"
+            ):
+                app.status = status_info["actual_status"]
+                db.commit()
+                logger.info(f"앱 {app_id} 상태 자동 동기화: {status_info['actual_status']}")
+
+        return {"success": True, "data": status_info}
+
+    except Exception as e:
+        logger.error(f"실시간 상태 확인 실패: {str(e)}")
+        return {"success": False, "message": f"상태 확인 실패: {str(e)}", "data": status_info}
+
+
+@router.get("/realtime-status/all")
+async def get_all_apps_realtime_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """모든 앱의 실시간 상태 확인"""
+    apps = db.query(App).filter(App.user_id == current_user.id).all()
+
+    results = []
+    for app in apps:
+        try:
+            # 개별 앱 상태 확인 (간소화된 버전)
+            status_info = {
+                "app_id": app.id,
+                "name": app.name,
+                "db_status": app.status,
+                "container_name": app.container_name,
+                "subdomain": app.subdomain,
+                "container_running": False,
+                "nginx_config_valid": False,
+                "actual_status": app.status,
+                "last_checked": datetime.now().isoformat(),
+            }
+
+            # 컨테이너 실행 상태만 빠르게 확인
+            if app.container_name:
+                try:
+                    running_check = subprocess.run(
+                        ["docker", "ps", "--filter", f"name={app.container_name}", "--format", "{{.Names}}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                    )
+                    if running_check.returncode == 0:
+                        running_containers = running_check.stdout.strip().split("\n")
+                        status_info["container_running"] = app.container_name in running_containers
+                except:
+                    pass
+
+            # Nginx 설정 존재 여부만 확인
+            if app.subdomain:
+                try:
+                    from services.nginx_service import NginxService
+
+                    nginx_service = NginxService()
+                    config_file = os.path.join(nginx_service.config_dir, f"{app.subdomain}.conf")
+                    status_info["nginx_config_valid"] = os.path.exists(config_file)
+                except:
+                    pass
+
+            # 간단한 상태 판정
+            if status_info["container_running"] and status_info["nginx_config_valid"]:
+                status_info["actual_status"] = "running"
+            elif not status_info["container_running"]:
+                status_info["actual_status"] = "stopped"
+            else:
+                status_info["actual_status"] = "error"
+
+            results.append(status_info)
+
+        except Exception as e:
+            logger.error(f"앱 {app.id} 상태 확인 실패: {str(e)}")
+            results.append(
+                {
+                    "app_id": app.id,
+                    "name": app.name,
+                    "db_status": app.status,
+                    "actual_status": "error",
+                    "error": str(e),
+                    "last_checked": datetime.now().isoformat(),
+                }
+            )
+
+    return {"success": True, "data": results, "total": len(results), "checked_at": datetime.now().isoformat()}

@@ -33,6 +33,7 @@ class App(Base):
     custom_dockerfile_commands = Column(Text)  # 사용자 정의 Docker 명령어들
     status = Column(String(20), default="stopped")  # stopped, building, deploying, running, error, stopping
     container_id = Column(String(100))
+    container_name = Column(String(100))  # 실제 Docker 컨테이너 이름
     image_name = Column(String(200))  # Docker 이미지 이름
     port = Column(Integer)
     subdomain = Column(String(100), unique=True)

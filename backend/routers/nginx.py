@@ -111,6 +111,82 @@ async def auto_cleanup_configs(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"자동 설정 파일 정리 실패: {str(e)}")
 
 
+@router.post("/cleanup/validate")
+async def validate_and_cleanup_configs():
+    """
+    모든 설정 파일을 검증하고 문제가 있는 파일들을 자동 삭제
+    """
+    try:
+        nginx_service = NginxService()
+        result = await nginx_service.validate_and_cleanup_configs()
+
+        if result["success"]:
+            return {"success": True, "data": result, "message": result["message"]}
+        else:
+            raise HTTPException(status_code=400, detail=result["message"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"설정 파일 검증 및 정리 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"설정 파일 검증 및 정리 실패: {str(e)}")
+
+
+@router.get("/configs/status")
+async def get_all_app_configs_status():
+    """
+    모든 앱 설정 파일의 상태 확인
+    """
+    try:
+        nginx_service = NginxService()
+        result = await nginx_service.get_all_app_configs_status()
+
+        if result["success"]:
+            return {"success": True, "data": result}
+        else:
+            raise HTTPException(status_code=400, detail=result["message"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"앱 설정 상태 확인 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"앱 설정 상태 확인 실패: {str(e)}")
+
+
+@router.get("/configs/status/{app_name}")
+async def get_app_config_status(app_name: str):
+    """
+    특정 앱 설정 파일의 상태 확인
+    """
+    try:
+        nginx_service = NginxService()
+        result = await nginx_service.get_app_config_status(app_name)
+        return {"success": True, "data": result}
+
+    except Exception as e:
+        logger.error(f"앱 설정 상태 확인 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"앱 설정 상태 확인 실패: {str(e)}")
+
+
+@router.delete("/apps/{app_name}/complete")
+async def remove_app_and_container(app_name: str):
+    """
+    앱 설정 파일과 연결된 컨테이너를 함께 삭제
+    """
+    try:
+        nginx_service = NginxService()
+        result = await nginx_service.remove_app_and_container(app_name)
+
+        if result["success"]:
+            return {"success": True, "data": result, "message": result["message"]}
+        else:
+            return {"success": False, "data": result, "message": result["message"]}
+
+    except Exception as e:
+        logger.error(f"앱 및 컨테이너 삭제 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"앱 및 컨테이너 삭제 실패: {str(e)}")
+
+
 @router.delete("/config/{subdomain}")
 async def remove_specific_config(subdomain: str):
     """

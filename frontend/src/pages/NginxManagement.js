@@ -21,7 +21,15 @@ import {
   Divider,
   Paper,
   CircularProgress,
-  Snackbar
+  Snackbar,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Tooltip,
+  Stack
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -30,20 +38,23 @@ import {
   Settings as SettingsIcon,
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
-  Info as InfoIcon
+  Info as InfoIcon,
+  Warning as WarningIcon
 } from '@mui/icons-material';
 import { safeFetch, formatErrorMessage } from '../utils/errorHandler';
+import { toast } from 'react-hot-toast';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const NginxManagement = () => {
   const [dynamicConfigs, setDynamicConfigs] = useState(null);
+  const [nginxStatus, setNginxStatus] = useState({ loading: false, valid: null });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [deleteDialog, setDeleteDialog] = useState({ open: false, subdomain: '' });
   const [cleanupDialog, setCleanupDialog] = useState({ open: false, activeApps: '' });
-  const [nginxStatus, setNginxStatus] = useState({ valid: null, loading: false });
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, subdomain: '' });
+  const [appConfigsStatus, setAppConfigsStatus] = useState(null);
 
   // 데이터 로드
   const loadDynamicConfigs = async () => {
@@ -62,6 +73,19 @@ const NginxManagement = () => {
       setError(formatErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 앱 설정 상태 조회
+  const loadAppConfigsStatus = async () => {
+    try {
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/configs/status`);
+      if (data.success) {
+        setAppConfigsStatus(data.data);
+      }
+    } catch (err) {
+      console.error('loadAppConfigsStatus error:', err);
+      setError(formatErrorMessage(err));
     }
   };
 
@@ -84,24 +108,140 @@ const NginxManagement = () => {
 
   // 자동 정리
   const handleAutoCleanup = async () => {
-    setLoading(true);
     try {
+      setLoading(true);
       const data = await safeFetch(`${API_BASE_URL}/api/nginx/cleanup/auto`, {
-        method: 'POST'
+        method: 'POST',
       });
       
       if (data.success) {
-        setSuccess(data.message || '자동 정리가 완료되었습니다.');
+        toast.success(data.message);
         loadDynamicConfigs();
       } else {
-        setError(data.message || '자동 정리 실패');
+        toast.error(data.message || '자동 정리에 실패했습니다.');
       }
-    } catch (err) {
-      console.error('handleAutoCleanup error:', err);
-      setError(formatErrorMessage(err));
+    } catch (error) {
+      console.error('자동 정리 실패:', error);
+      toast.error('자동 정리에 실패했습니다.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleValidateAndCleanup = async () => {
+    try {
+      setLoading(true);
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/cleanup/validate`, {
+        method: 'POST',
+      });
+      
+      if (data.success) {
+        const result = data.data;
+        const message = `검증 완료: ${result.total_checked}개 파일 검증, ${result.removed_files.length}개 문제 파일 삭제`;
+        toast.success(message);
+        
+        // 상세 결과 로그
+        if (result.removed_files.length > 0) {
+          console.log('삭제된 파일들:', result.removed_files);
+          console.log('검증 결과:', result.validation_results);
+        }
+        
+        loadDynamicConfigs(); // 목록 새로고침
+        loadAppConfigsStatus(); // 상태 새로고침
+      } else {
+        toast.error(data.message || '검증 및 정리에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('검증 및 정리 실패:', error);
+      toast.error('검증 및 정리에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveAppAndContainer = async (appName) => {
+    if (!window.confirm(`정말로 앱 "${appName}"과 연결된 컨테이너를 모두 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/apps/${appName}/complete`, {
+        method: 'DELETE',
+      });
+      
+      if (data.success) {
+        toast.success(data.message);
+        loadDynamicConfigs();
+        loadAppConfigsStatus();
+      } else {
+        toast.error(data.message || '삭제에 실패했습니다.');
+        console.log('삭제 상세 결과:', data.data);
+      }
+    } catch (error) {
+      console.error('앱 및 컨테이너 삭제 실패:', error);
+      toast.error('삭제에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveConfigOnly = async (appName) => {
+    if (!window.confirm(`정말로 앱 "${appName}"의 설정 파일만 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/remove/${appName}`, {
+        method: 'DELETE',
+      });
+      
+      if (data.success) {
+        toast.success(data.message);
+        loadDynamicConfigs();
+        loadAppConfigsStatus();
+      } else {
+        toast.error(data.message || '설정 삭제에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('설정 삭제 실패:', error);
+      toast.error('설정 삭제에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusChip = (status) => {
+    if (status.healthy) {
+      return <Chip icon={<CheckIcon />} label="정상" color="success" size="small" />;
+    } else if (status.exists && status.valid && status.container_exists && !status.container_running) {
+      return <Chip icon={<WarningIcon />} label="컨테이너 중지됨" color="warning" size="small" />;
+    } else if (status.exists && status.valid && !status.container_exists) {
+      return <Chip icon={<ErrorIcon />} label="컨테이너 없음" color="error" size="small" />;
+    } else if (status.exists && !status.valid) {
+      return <Chip icon={<ErrorIcon />} label="설정 오류" color="error" size="small" />;
+    } else if (!status.exists) {
+      return <Chip icon={<ErrorIcon />} label="파일 없음" color="error" size="small" />;
+    } else {
+      return <Chip icon={<InfoIcon />} label="확인 필요" color="info" size="small" />;
+    }
+  };
+
+  const getIssuesText = (issues) => {
+    if (!issues || issues.length === 0) return '';
+    
+    if (issues.length <= 2) {
+      return issues.join(', ');
+    } else {
+      return `${issues.slice(0, 2).join(', ')} 외 ${issues.length - 2}개 더`;
+    }
+  };
+
+  const refreshAll = () => {
+    loadDynamicConfigs();
+    loadAppConfigsStatus();
+    testNginxConfig();
   };
 
   // 수동 정리
@@ -111,56 +251,51 @@ const NginxManagement = () => {
       return;
     }
 
-    setLoading(true);
     try {
-      const activeApps = cleanupDialog.activeApps
-        .split(',')
-        .map(app => app.trim())
-        .filter(app => app);
-
-      const data = await safeFetch(`${API_BASE_URL}/api/nginx/cleanup`, {
+      setLoading(true);
+      const activeApps = cleanupDialog.activeApps.split(',').map(app => app.trim()).filter(app => app);
+      
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/cleanup/manual`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ active_apps: activeApps })
+        body: JSON.stringify({ active_apps: activeApps }),
       });
       
       if (data.success) {
-        setSuccess(data.message || '수동 정리가 완료되었습니다.');
-        loadDynamicConfigs();
+        setSuccess(data.message);
         setCleanupDialog({ open: false, activeApps: '' });
+        loadDynamicConfigs();
       } else {
-        setError(data.message || '수동 정리 실패');
+        setError(data.message || '수동 정리에 실패했습니다.');
       }
-    } catch (err) {
-      console.error('handleManualCleanup error:', err);
-      setError(formatErrorMessage(err));
+    } catch (error) {
+      console.error('수동 정리 실패:', error);
+      setError('수동 정리에 실패했습니다.');
     } finally {
       setLoading(false);
     }
   };
 
-  // 특정 설정 파일 삭제
+  // 특정 설정 삭제
   const handleDeleteConfig = async () => {
-    if (!deleteDialog.subdomain) return;
-
-    setLoading(true);
     try {
-      const data = await safeFetch(`${API_BASE_URL}/api/nginx/config/${deleteDialog.subdomain}`, {
-        method: 'DELETE'
+      setLoading(true);
+      const data = await safeFetch(`${API_BASE_URL}/api/nginx/remove/${deleteDialog.subdomain}`, {
+        method: 'DELETE',
       });
       
       if (data.success) {
-        setSuccess(data.message || '설정 파일이 삭제되었습니다.');
-        loadDynamicConfigs();
+        setSuccess(data.message);
         setDeleteDialog({ open: false, subdomain: '' });
+        loadDynamicConfigs();
       } else {
-        setError(data.message || '설정 파일 삭제 실패');
+        setError(data.message || '설정 삭제에 실패했습니다.');
       }
-    } catch (err) {
-      console.error('handleDeleteConfig error:', err);
-      setError(formatErrorMessage(err));
+    } catch (error) {
+      console.error('설정 삭제 실패:', error);
+      setError('설정 삭제에 실패했습니다.');
     } finally {
       setLoading(false);
     }
@@ -168,221 +303,276 @@ const NginxManagement = () => {
 
   // Nginx 리로드
   const handleReloadNginx = async () => {
-    setLoading(true);
     try {
+      setLoading(true);
       const data = await safeFetch(`${API_BASE_URL}/api/nginx/reload`, {
-        method: 'POST'
+        method: 'POST',
       });
       
       if (data.success) {
-        setSuccess(data.message || 'Nginx가 성공적으로 리로드되었습니다.');
+        setSuccess(data.message);
         testNginxConfig();
       } else {
-        setError(data.message || 'Nginx 리로드 실패');
+        setError(data.message || 'Nginx 리로드에 실패했습니다.');
       }
-    } catch (err) {
-      console.error('handleReloadNginx error:', err);
-      setError(formatErrorMessage(err));
+    } catch (error) {
+      console.error('Nginx 리로드 실패:', error);
+      setError('Nginx 리로드에 실패했습니다.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadDynamicConfigs();
-    testNginxConfig();
+    refreshAll();
   }, []);
 
   return (
-    <Box>
+    <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        🔧 Nginx 설정 관리
+        Nginx 관리
       </Typography>
 
-      {/* 상태 표시 */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Typography variant="h6">Nginx 상태</Typography>
-                <Button
-                  size="small"
-                  onClick={testNginxConfig}
-                  disabled={nginxStatus.loading}
-                  startIcon={nginxStatus.loading ? <CircularProgress size={16} /> : <CheckIcon />}
-                >
-                  상태 확인
-                </Button>
-              </Box>
-              <Box display="flex" alignItems="center" mt={1}>
-                {nginxStatus.loading ? (
-                  <CircularProgress size={20} />
-                ) : nginxStatus.valid === true ? (
-                  <Chip icon={<CheckIcon />} label="정상" color="success" />
-                ) : nginxStatus.valid === false ? (
-                  <Chip icon={<ErrorIcon />} label="오류" color="error" />
-                ) : (
-                  <Chip icon={<InfoIcon />} label="확인 필요" color="default" />
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+      {/* 에러/성공 메시지 */}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+          {error}
+        </Alert>
+      )}
+      {success && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>
+          {success}
+        </Alert>
+      )}
 
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>설정 파일 현황</Typography>
-              {dynamicConfigs && (
-                <Box>
-                  <Typography variant="body2" color="textSecondary">
-                    총 {dynamicConfigs.total_count}개 파일
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    앱: {dynamicConfigs.app_count}개, 시스템: {dynamicConfigs.system_files.length}개
-                  </Typography>
-                </Box>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+      {/* 상단 액션 버튼들 */}
+      <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
+        <Button
+          variant="contained"
+          startIcon={<RefreshIcon />}
+          onClick={refreshAll}
+          disabled={loading}
+        >
+          새로고침
+        </Button>
+        
+        <Button
+          variant="outlined"
+          startIcon={<CleanIcon />}
+          onClick={handleAutoCleanup}
+          disabled={loading}
+        >
+          자동 정리
+        </Button>
 
-      {/* 액션 버튼들 */}
+        <Button
+          variant="outlined"
+          startIcon={<SettingsIcon />}
+          onClick={handleValidateAndCleanup}
+          disabled={loading}
+        >
+          검증 및 정리
+        </Button>
+
+        <Button
+          variant="outlined"
+          onClick={handleReloadNginx}
+          disabled={loading}
+        >
+          Nginx 리로드
+        </Button>
+      </Stack>
+
+      {/* Nginx 상태 */}
       <Paper sx={{ p: 2, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>관리 작업</Typography>
-        <Grid container spacing={2}>
-          <Grid item>
-            <Button
-              variant="contained"
-              startIcon={<RefreshIcon />}
-              onClick={loadDynamicConfigs}
-              disabled={loading}
-            >
-              새로고침
-            </Button>
-          </Grid>
-          <Grid item>
-            <Button
-              variant="contained"
-              color="warning"
-              startIcon={<CleanIcon />}
-              onClick={handleAutoCleanup}
-              disabled={loading}
-            >
-              자동 정리
-            </Button>
-          </Grid>
-          <Grid item>
-            <Button
-              variant="outlined"
-              startIcon={<CleanIcon />}
-              onClick={() => setCleanupDialog({ open: true, activeApps: '' })}
-              disabled={loading}
-            >
-              수동 정리
-            </Button>
-          </Grid>
-          <Grid item>
-            <Button
-              variant="contained"
-              color="secondary"
-              startIcon={<SettingsIcon />}
-              onClick={handleReloadNginx}
-              disabled={loading}
-            >
-              Nginx 리로드
-            </Button>
-          </Grid>
-        </Grid>
+        <Typography variant="h6" gutterBottom>
+          Nginx 상태
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {nginxStatus.loading ? (
+            <CircularProgress size={20} />
+          ) : (
+            <Chip
+              icon={nginxStatus.valid ? <CheckIcon /> : <ErrorIcon />}
+              label={nginxStatus.valid ? '정상' : '오류'}
+              color={nginxStatus.valid ? 'success' : 'error'}
+            />
+          )}
+          <Typography variant="body2">
+            설정 파일 유효성: {nginxStatus.valid === null ? '확인 중...' : (nginxStatus.valid ? '정상' : '오류')}
+          </Typography>
+        </Box>
       </Paper>
 
-      {/* 설정 파일 목록 */}
-      <Grid container spacing={3}>
-        {/* 앱 설정 파일들 */}
-        <Grid item xs={12} md={8}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                앱 설정 파일 ({dynamicConfigs?.app_count || 0}개)
-              </Typography>
-              {loading ? (
-                <Box display="flex" justifyContent="center" p={2}>
-                  <CircularProgress />
-                </Box>
-              ) : dynamicConfigs?.app_configs.length > 0 ? (
-                <List>
-                  {dynamicConfigs.app_configs.map((app, index) => (
-                    <React.Fragment key={app}>
-                      <ListItem>
-                        <ListItemText
-                          primary={`${app}.conf`}
-                          secondary={`앱: ${app}`}
-                        />
-                        <ListItemSecondaryAction>
+      {/* 전체 상태 요약 */}
+      {appConfigsStatus && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Typography variant="h6" gutterBottom>
+            앱 설정 상태 요약
+          </Typography>
+          <Stack direction="row" spacing={3}>
+            <Typography variant="body2">
+              전체: {appConfigsStatus.total_configs}개
+            </Typography>
+            <Typography variant="body2" color="success.main">
+              정상: {appConfigsStatus.healthy_configs}개
+            </Typography>
+            <Typography variant="body2" color="error.main">
+              문제: {appConfigsStatus.configs_with_issues}개
+            </Typography>
+          </Stack>
+        </Paper>
+      )}
+
+      {/* 앱 설정 테이블 */}
+      <Paper sx={{ mb: 3 }}>
+        <Typography variant="h6" sx={{ p: 2, pb: 0 }}>
+          앱 설정 목록
+        </Typography>
+        
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : appConfigsStatus && appConfigsStatus.statuses ? (
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>앱 이름</TableCell>
+                  <TableCell>상태</TableCell>
+                  <TableCell>컨테이너</TableCell>
+                  <TableCell>문제점</TableCell>
+                  <TableCell align="right">액션</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {appConfigsStatus.statuses.map((status) => (
+                  <TableRow key={status.app_name}>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight="medium">
+                        {status.app_name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {status.config_file}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      {getStatusChip(status)}
+                    </TableCell>
+                    <TableCell>
+                      {status.container_name ? (
+                        <Box>
+                          <Typography variant="body2" fontWeight="medium">
+                            {status.container_name}
+                          </Typography>
+                          <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                            <Chip
+                              label={status.container_exists ? '존재' : '없음'}
+                              color={status.container_exists ? 'success' : 'error'}
+                              size="small"
+                              variant="outlined"
+                            />
+                            {status.container_exists && (
+                              <Chip
+                                label={status.container_running ? '실행중' : '중지됨'}
+                                color={status.container_running ? 'success' : 'warning'}
+                                size="small"
+                                variant="outlined"
+                              />
+                            )}
+                          </Stack>
+                        </Box>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">
+                          컨테이너 정보 없음
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {status.issues && status.issues.length > 0 ? (
+                        <Tooltip title={status.issues.join(', ')} arrow>
+                          <Typography variant="body2" color="error.main">
+                            {getIssuesText(status.issues)}
+                          </Typography>
+                        </Tooltip>
+                      ) : (
+                        <Typography variant="body2" color="success.main">
+                          문제 없음
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Stack direction="row" spacing={1} justifyContent="flex-end">
+                        <Tooltip title="설정 파일만 삭제">
                           <IconButton
-                            edge="end"
-                            color="error"
-                            onClick={() => setDeleteDialog({ open: true, subdomain: app })}
+                            size="small"
+                            color="warning"
+                            onClick={() => handleRemoveConfigOnly(status.app_name)}
                             disabled={loading}
                           >
-                            <DeleteIcon />
+                            <DeleteIcon fontSize="small" />
                           </IconButton>
-                        </ListItemSecondaryAction>
-                      </ListItem>
-                      {index < dynamicConfigs.app_configs.length - 1 && <Divider />}
-                    </React.Fragment>
-                  ))}
-                </List>
-              ) : (
-                <Typography color="textSecondary" align="center" sx={{ py: 2 }}>
-                  앱 설정 파일이 없습니다.
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
+                        </Tooltip>
+                        <Tooltip title="설정 파일 + 컨테이너 삭제">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleRemoveAppAndContainer(status.app_name)}
+                            disabled={loading}
+                          >
+                            <CleanIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ) : (
+          <Box sx={{ p: 3, textAlign: 'center' }}>
+            <Typography color="text.secondary">
+              앱 설정 정보를 불러오는 중...
+            </Typography>
+          </Box>
+        )}
+      </Paper>
 
-        {/* 시스템 설정 파일들 */}
-        <Grid item xs={12} md={4}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                시스템 파일 ({dynamicConfigs?.system_files.length || 0}개)
-              </Typography>
-              {dynamicConfigs?.system_files.length > 0 ? (
-                <List dense>
-                  {dynamicConfigs.system_files.map((file) => (
-                    <ListItem key={file}>
-                      <ListItemText
-                        primary={file}
-                        secondary="보호됨"
-                      />
-                      <Chip size="small" label="시스템" color="default" />
-                    </ListItem>
-                  ))}
-                </List>
-              ) : (
-                <Typography color="textSecondary" align="center" sx={{ py: 2 }}>
-                  시스템 파일이 없습니다.
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+      {/* 수동 정리 다이얼로그 */}
+      <Dialog open={cleanupDialog.open} onClose={() => setCleanupDialog({ open: false, activeApps: '' })}>
+        <DialogTitle>수동 정리</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="활성 앱 목록 (쉼표로 구분)"
+            fullWidth
+            variant="outlined"
+            value={cleanupDialog.activeApps}
+            onChange={(e) => setCleanupDialog({ ...cleanupDialog, activeApps: e.target.value })}
+            placeholder="app1, app2, app3"
+            helperText="현재 활성화된 앱들의 서브도메인을 쉼표로 구분하여 입력하세요"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCleanupDialog({ open: false, activeApps: '' })}>
+            취소
+          </Button>
+          <Button onClick={handleManualCleanup} variant="contained">
+            정리 실행
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* 삭제 확인 다이얼로그 */}
       <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, subdomain: '' })}>
-        <DialogTitle>설정 파일 삭제</DialogTitle>
+        <DialogTitle>설정 삭제 확인</DialogTitle>
         <DialogContent>
           <Typography>
-            정말로 <strong>{deleteDialog.subdomain}.conf</strong> 파일을 삭제하시겠습니까?
+            정말로 "{deleteDialog.subdomain}" 설정을 삭제하시겠습니까?
           </Typography>
-          <Alert severity="warning" sx={{ mt: 2 }}>
-            이 작업은 되돌릴 수 없으며, 해당 앱의 Nginx 설정이 제거됩니다.
-          </Alert>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteDialog({ open: false, subdomain: '' })}>
@@ -393,57 +583,6 @@ const NginxManagement = () => {
           </Button>
         </DialogActions>
       </Dialog>
-
-      {/* 수동 정리 다이얼로그 */}
-      <Dialog open={cleanupDialog.open} onClose={() => setCleanupDialog({ open: false, activeApps: '' })}>
-        <DialogTitle>수동 설정 정리</DialogTitle>
-        <DialogContent>
-          <Typography gutterBottom>
-            유지할 활성 앱들의 이름을 쉼표로 구분하여 입력하세요:
-          </Typography>
-          <TextField
-            fullWidth
-            multiline
-            rows={3}
-            value={cleanupDialog.activeApps}
-            onChange={(e) => setCleanupDialog({ ...cleanupDialog, activeApps: e.target.value })}
-            placeholder="예: app1, app2, app3"
-            sx={{ mt: 2 }}
-          />
-          <Alert severity="info" sx={{ mt: 2 }}>
-            입력하지 않은 앱들의 설정 파일은 모두 삭제됩니다.
-          </Alert>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCleanupDialog({ open: false, activeApps: '' })}>
-            취소
-          </Button>
-          <Button onClick={handleManualCleanup} color="warning" variant="contained">
-            정리 실행
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 성공/오류 메시지 */}
-      <Snackbar
-        open={!!success}
-        autoHideDuration={6000}
-        onClose={() => setSuccess('')}
-      >
-        <Alert onClose={() => setSuccess('')} severity="success">
-          {success}
-        </Alert>
-      </Snackbar>
-
-      <Snackbar
-        open={!!error}
-        autoHideDuration={6000}
-        onClose={() => setError('')}
-      >
-        <Alert onClose={() => setError('')} severity="error">
-          {typeof error === 'string' ? error : formatErrorMessage(error)}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

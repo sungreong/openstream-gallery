@@ -549,53 +549,494 @@ location ~ ^/{{ subdomain }}/(.*\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|tt
             return {"success": False, "message": "설정 파일 정리 중 오류 발생", "removed_files": [], "error": str(e)}
 
     async def remove_specific_config(self, subdomain: str) -> Dict[str, any]:
-        """특정 설정 파일 삭제"""
+        """특정 서브도메인의 설정 파일 삭제"""
         try:
-            logger.info(f"🗑️ 특정 설정 파일 삭제 시작: {subdomain}")
+            config_file = f"{subdomain}.conf"
+            config_path = os.path.join(self.config_dir, config_file)
 
-            # 시스템 파일 보호
-            if f"{subdomain}.conf" in self.system_configs:
-                logger.warning(f"⚠️ 시스템 설정 파일은 삭제할 수 없습니다: {subdomain}.conf")
-                return {
-                    "success": False,
-                    "message": f"시스템 설정 파일은 삭제할 수 없습니다: {subdomain}.conf",
-                    "error": "시스템 파일 보호",
-                }
+            if not os.path.exists(config_path):
+                return {"success": False, "message": f"설정 파일을 찾을 수 없습니다: {config_file}"}
 
-            config_file = os.path.join(self.config_dir, f"{subdomain}.conf")
+            # 시스템 설정 파일 보호
+            if config_file in self.system_configs:
+                return {"success": False, "message": f"시스템 설정 파일은 삭제할 수 없습니다: {config_file}"}
 
-            if not os.path.exists(config_file):
-                logger.warning(f"⚠️ 설정 파일이 존재하지 않습니다: {subdomain}.conf")
-                return {
-                    "success": False,
-                    "message": f"설정 파일이 존재하지 않습니다: {subdomain}.conf",
-                    "error": "파일 없음",
-                }
+            os.remove(config_path)
+            logger.info(f"🗑️ 설정 파일 삭제 완료: {config_file}")
 
-            # 파일 삭제
-            os.remove(config_file)
-            logger.info(f"✅ 설정 파일 삭제 완료: {subdomain}.conf")
-
-            # Nginx 설정 테스트 후 리로드
-            logger.info("🔍 Nginx 설정 유효성 검사 중...")
-            if await self.test_nginx_config():
-                logger.info("✅ Nginx 설정 유효성 검사 통과")
-                await self.reload_nginx()
-                logger.info(f"🎉 {subdomain} 설정 파일 삭제 완료")
-            else:
-                logger.error("❌ Nginx 설정 유효성 검사 실패")
-                return {
-                    "success": False,
-                    "message": "Nginx 설정 유효성 검사 실패",
-                    "error": "설정 파일 삭제 후 Nginx 설정이 유효하지 않음",
-                }
+            # Nginx 리로드
+            reload_success = await self.reload_nginx()
+            if not reload_success:
+                logger.warning("⚠️ Nginx 리로드 실패, 하지만 파일 삭제는 완료됨")
 
             return {
                 "success": True,
-                "message": f"{subdomain} 설정 파일이 성공적으로 삭제되었습니다.",
-                "removed_file": f"{subdomain}.conf",
+                "message": f"설정 파일이 삭제되었습니다: {config_file}",
+                "nginx_reloaded": reload_success,
             }
 
         except Exception as e:
-            logger.error(f"❌ 특정 설정 파일 삭제 실패: {str(e)}")
-            return {"success": False, "message": f"{subdomain} 설정 파일 삭제 중 오류 발생", "error": str(e)}
+            logger.error(f"❌ 설정 파일 삭제 실패: {str(e)}")
+            return {"success": False, "message": f"설정 파일 삭제 실패: {str(e)}"}
+
+    async def validate_and_cleanup_configs(self) -> Dict[str, any]:
+        """
+        모든 설정 파일을 개별적으로 검증하고 문제가 있는 파일들을 자동 삭제
+        """
+        try:
+            logger.info("🔍 설정 파일 검증 및 자동 정리 시작...")
+
+            # 동적 설정 파일 목록 조회
+            configs = await self.get_dynamic_configs()
+            app_configs = configs.get("app_configs", [])
+
+            if not app_configs:
+                return {
+                    "success": True,
+                    "message": "검증할 설정 파일이 없습니다.",
+                    "removed_files": [],
+                    "total_checked": 0,
+                }
+
+            removed_files = []
+            validation_results = []
+
+            for app_name in app_configs:
+                config_file = f"{app_name}.conf"
+                logger.info(f"🔍 설정 파일 검증 중: {config_file}")
+
+                # 개별 파일 검증
+                validation_result = await self._validate_single_config(config_file)
+                validation_results.append(
+                    {
+                        "file": config_file,
+                        "app_name": app_name,
+                        "valid": validation_result["valid"],
+                        "reason": validation_result.get("reason", ""),
+                    }
+                )
+
+                # 검증 실패 시 파일 삭제
+                if not validation_result["valid"]:
+                    logger.warning(
+                        f"⚠️ 문제 발견: {config_file} - {validation_result.get('reason', '알 수 없는 오류')}"
+                    )
+
+                    try:
+                        config_path = os.path.join(self.config_dir, config_file)
+                        os.remove(config_path)
+                        removed_files.append(config_file)
+                        logger.info(f"🗑️ 문제 파일 삭제 완료: {config_file}")
+                    except Exception as e:
+                        logger.error(f"❌ 파일 삭제 실패: {config_file} - {str(e)}")
+                else:
+                    logger.info(f"✅ 설정 파일 정상: {config_file}")
+
+            # 파일이 삭제되었으면 Nginx 리로드
+            nginx_reloaded = False
+            if removed_files:
+                logger.info(f"🔄 {len(removed_files)}개 파일 삭제로 인한 Nginx 리로드...")
+                nginx_reloaded = await self.reload_nginx()
+                if not nginx_reloaded:
+                    logger.warning("⚠️ Nginx 리로드 실패")
+
+            return {
+                "success": True,
+                "message": f"검증 완료. {len(removed_files)}개 문제 파일 삭제됨",
+                "total_checked": len(app_configs),
+                "removed_files": removed_files,
+                "validation_results": validation_results,
+                "nginx_reloaded": nginx_reloaded,
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 설정 파일 검증 및 정리 실패: {str(e)}")
+            return {"success": False, "message": f"설정 파일 검증 실패: {str(e)}"}
+
+    async def _validate_single_config(self, config_file: str) -> Dict[str, any]:
+        """
+        개별 설정 파일 검증
+        """
+        try:
+            config_path = os.path.join(self.config_dir, config_file)
+
+            # 1. 파일 존재 여부 확인
+            if not os.path.exists(config_path):
+                return {"valid": False, "reason": "파일이 존재하지 않음"}
+
+            # 2. 파일 읽기 가능 여부 확인
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                if not content.strip():
+                    return {"valid": False, "reason": "빈 파일"}
+            except Exception as e:
+                return {"valid": False, "reason": f"파일 읽기 실패: {str(e)}"}
+
+            # 3. 기본 Nginx 문법 검사 (간단한 체크)
+            if not self._basic_nginx_syntax_check(content):
+                return {"valid": False, "reason": "Nginx 문법 오류"}
+
+            # 4. upstream 연결 가능성 검사
+            upstream_check = await self._check_upstream_connectivity(content, config_file)
+            if not upstream_check["valid"]:
+                return {"valid": False, "reason": upstream_check["reason"]}
+
+            return {"valid": True}
+
+        except Exception as e:
+            return {"valid": False, "reason": f"검증 중 오류: {str(e)}"}
+
+    def _basic_nginx_syntax_check(self, content: str) -> bool:
+        """
+        기본적인 Nginx 설정 문법 검사
+        """
+        try:
+            # 기본적인 문법 요소들 확인
+            required_elements = [
+                "location",  # location 블록이 있어야 함
+                "proxy_pass",  # proxy_pass 지시어가 있어야 함
+            ]
+
+            for element in required_elements:
+                if element not in content:
+                    logger.warning(f"⚠️ 필수 요소 누락: {element}")
+                    return False
+
+            # 중괄호 균형 검사
+            open_braces = content.count("{")
+            close_braces = content.count("}")
+            if open_braces != close_braces:
+                logger.warning(f"⚠️ 중괄호 불균형: {{ {open_braces}개, }} {close_braces}개")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ 문법 검사 실패: {str(e)}")
+            return False
+
+    async def _check_upstream_connectivity(self, content: str, config_file: str) -> Dict[str, any]:
+        """
+        upstream 서버 연결 가능성 검사
+        """
+        try:
+            import re
+
+            # proxy_pass에서 upstream 서버 추출
+            proxy_pass_pattern = r"proxy_pass\s+http://([^:/]+):(\d+)"
+            matches = re.findall(proxy_pass_pattern, content)
+
+            if not matches:
+                return {"valid": False, "reason": "proxy_pass 설정을 찾을 수 없음"}
+
+            for host, port in matches:
+                # Docker 컨테이너 존재 여부 확인
+                container_exists = await self._check_docker_container_exists(host)
+                if not container_exists:
+                    return {"valid": False, "reason": f"upstream 컨테이너가 존재하지 않음: {host}"}
+
+                # 컨테이너가 실행 중인지 확인
+                container_running = await self._check_docker_container_running(host)
+                if not container_running:
+                    return {"valid": False, "reason": f"upstream 컨테이너가 실행 중이 아님: {host}"}
+
+            return {"valid": True}
+
+        except Exception as e:
+            logger.error(f"❌ upstream 연결성 검사 실패: {str(e)}")
+            return {"valid": False, "reason": f"upstream 검사 실패: {str(e)}"}
+
+    async def _check_docker_container_exists(self, container_name: str) -> bool:
+        """
+        Docker 컨테이너 존재 여부 확인
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                containers = result.stdout.strip().split("\n")
+                return container_name in containers
+
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ 컨테이너 존재 확인 실패: {str(e)}")
+            return False
+
+    async def _check_docker_container_running(self, container_name: str) -> bool:
+        """
+        Docker 컨테이너 실행 상태 확인
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                running_containers = result.stdout.strip().split("\n")
+                return container_name in running_containers
+
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ 컨테이너 실행 상태 확인 실패: {str(e)}")
+            return False
+
+    async def get_app_config_status(self, app_name: str) -> Dict[str, any]:
+        """
+        특정 앱 설정 파일의 상태 확인
+        """
+        try:
+            config_file = f"{app_name}.conf"
+            config_path = os.path.join(self.config_dir, config_file)
+
+            # 기본 정보
+            status = {
+                "app_name": app_name,
+                "config_file": config_file,
+                "exists": os.path.exists(config_path),
+                "valid": False,
+                "container_exists": False,
+                "container_running": False,
+                "issues": [],
+            }
+
+            if not status["exists"]:
+                status["issues"].append("설정 파일이 존재하지 않음")
+                return status
+
+            # 파일 검증
+            validation_result = await self._validate_single_config(config_file)
+            status["valid"] = validation_result["valid"]
+
+            if not validation_result["valid"]:
+                status["issues"].append(validation_result.get("reason", "알 수 없는 오류"))
+
+            # 컨테이너 상태 확인
+            container_name = f"streamlit_app_{app_name.split('-')[0]}"  # 앱 이름에서 컨테이너명 추정
+
+            # 더 정확한 컨테이너 이름 찾기
+            container_name = await self._find_container_name_for_app(app_name)
+
+            if container_name:
+                status["container_name"] = container_name
+                status["container_exists"] = await self._check_docker_container_exists(container_name)
+                status["container_running"] = await self._check_docker_container_running(container_name)
+
+                if not status["container_exists"]:
+                    status["issues"].append(f"컨테이너가 존재하지 않음: {container_name}")
+                elif not status["container_running"]:
+                    status["issues"].append(f"컨테이너가 실행 중이 아님: {container_name}")
+            else:
+                status["issues"].append("연결된 컨테이너를 찾을 수 없음")
+
+            # 전체 상태 판정
+            status["healthy"] = (
+                status["exists"] and status["valid"] and status["container_exists"] and status["container_running"]
+            )
+
+            return status
+
+        except Exception as e:
+            logger.error(f"❌ 앱 설정 상태 확인 실패: {str(e)}")
+            return {
+                "app_name": app_name,
+                "config_file": f"{app_name}.conf",
+                "exists": False,
+                "valid": False,
+                "container_exists": False,
+                "container_running": False,
+                "healthy": False,
+                "issues": [f"상태 확인 실패: {str(e)}"],
+            }
+
+    async def _find_container_name_for_app(self, app_name: str) -> str:
+        """
+        앱 이름으로부터 실제 컨테이너 이름 찾기 (데이터베이스 우선 조회)
+        """
+        try:
+            # 1. 데이터베이스에서 컨테이너 이름 조회 (subdomain으로 검색)
+            from database import get_db
+            from models import App
+
+            db = next(get_db())
+            try:
+                app = db.query(App).filter(App.subdomain == app_name).first()
+                if app and app.container_name:
+                    logger.info(f"✅ 데이터베이스에서 컨테이너 이름 찾음: {app.container_name}")
+                    return app.container_name
+            finally:
+                db.close()
+
+            # 2. 데이터베이스에서 찾지 못한 경우 기존 방식으로 fallback
+            logger.info(f"⚠️ 데이터베이스에서 컨테이너 이름을 찾지 못함, Docker에서 직접 검색: {app_name}")
+
+            # 가능한 컨테이너 이름 패턴들
+            possible_names = [
+                f"streamlit_app_{app_name}",
+                f"streamlit-app-{app_name}",
+                f"streamlit_app_{app_name.split('-')[0]}",
+                f"streamlit-app-{app_name.split('-')[0]}",
+                app_name,
+                app_name.replace("-", "_"),
+            ]
+
+            # Docker에서 실제 컨테이너 목록 조회
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0:
+                existing_containers = result.stdout.strip().split("\n")
+
+                # 정확히 일치하는 이름 찾기
+                for name in possible_names:
+                    if name in existing_containers:
+                        logger.info(f"✅ Docker에서 정확히 일치하는 컨테이너 찾음: {name}")
+                        return name
+
+                # 부분 일치하는 이름 찾기
+                for container in existing_containers:
+                    if app_name in container or any(name in container for name in possible_names):
+                        logger.info(f"✅ Docker에서 부분 일치하는 컨테이너 찾음: {container}")
+                        return container
+
+            logger.warning(f"⚠️ 컨테이너를 찾을 수 없음: {app_name}")
+            return ""
+
+        except Exception as e:
+            logger.error(f"❌ 컨테이너 이름 찾기 실패: {str(e)}")
+            return ""
+
+    async def get_all_app_configs_status(self) -> Dict[str, any]:
+        """
+        모든 앱 설정 파일의 상태 확인
+        """
+        try:
+            configs = await self.get_dynamic_configs()
+            app_configs = configs.get("app_configs", [])
+
+            statuses = []
+            for app_name in app_configs:
+                status = await self.get_app_config_status(app_name)
+                statuses.append(status)
+
+            # 통계 계산
+            total = len(statuses)
+            healthy = len([s for s in statuses if s.get("healthy", False)])
+            with_issues = len([s for s in statuses if s.get("issues", [])])
+
+            return {
+                "success": True,
+                "total_configs": total,
+                "healthy_configs": healthy,
+                "configs_with_issues": with_issues,
+                "statuses": statuses,
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 전체 앱 설정 상태 확인 실패: {str(e)}")
+            return {"success": False, "message": f"상태 확인 실패: {str(e)}"}
+
+    async def remove_app_and_container(self, app_name: str) -> Dict[str, any]:
+        """
+        앱 설정 파일과 연결된 컨테이너를 함께 삭제
+        """
+        try:
+            logger.info(f"🗑️ 앱 및 컨테이너 삭제 시작: {app_name}")
+
+            # 먼저 앱 상태 확인
+            status = await self.get_app_config_status(app_name)
+
+            results = {
+                "app_name": app_name,
+                "config_removed": False,
+                "container_stopped": False,
+                "container_removed": False,
+                "nginx_reloaded": False,
+                "errors": [],
+            }
+
+            # 1. 설정 파일 삭제
+            if status.get("exists", False):
+                try:
+                    config_path = os.path.join(self.config_dir, f"{app_name}.conf")
+                    os.remove(config_path)
+                    results["config_removed"] = True
+                    logger.info(f"✅ 설정 파일 삭제 완료: {app_name}.conf")
+                except Exception as e:
+                    error_msg = f"설정 파일 삭제 실패: {str(e)}"
+                    results["errors"].append(error_msg)
+                    logger.error(f"❌ {error_msg}")
+
+            # 2. 컨테이너 중지 및 삭제
+            container_name = status.get("container_name")
+            if container_name:
+                try:
+                    # 컨테이너 중지
+                    if status.get("container_running", False):
+                        stop_result = subprocess.run(
+                            ["docker", "stop", container_name], capture_output=True, text=True, timeout=30
+                        )
+                        if stop_result.returncode == 0:
+                            results["container_stopped"] = True
+                            logger.info(f"✅ 컨테이너 중지 완료: {container_name}")
+                        else:
+                            error_msg = f"컨테이너 중지 실패: {stop_result.stderr}"
+                            results["errors"].append(error_msg)
+                            logger.error(f"❌ {error_msg}")
+
+                    # 컨테이너 삭제
+                    if status.get("container_exists", False):
+                        remove_result = subprocess.run(
+                            ["docker", "rm", container_name], capture_output=True, text=True, timeout=30
+                        )
+                        if remove_result.returncode == 0:
+                            results["container_removed"] = True
+                            logger.info(f"✅ 컨테이너 삭제 완료: {container_name}")
+                        else:
+                            error_msg = f"컨테이너 삭제 실패: {remove_result.stderr}"
+                            results["errors"].append(error_msg)
+                            logger.error(f"❌ {error_msg}")
+
+                except Exception as e:
+                    error_msg = f"컨테이너 작업 실패: {str(e)}"
+                    results["errors"].append(error_msg)
+                    logger.error(f"❌ {error_msg}")
+
+            # 3. Nginx 리로드
+            if results["config_removed"]:
+                try:
+                    nginx_reloaded = await self.reload_nginx()
+                    results["nginx_reloaded"] = nginx_reloaded
+                    if nginx_reloaded:
+                        logger.info("✅ Nginx 리로드 완료")
+                    else:
+                        results["errors"].append("Nginx 리로드 실패")
+                        logger.warning("⚠️ Nginx 리로드 실패")
+                except Exception as e:
+                    error_msg = f"Nginx 리로드 실패: {str(e)}"
+                    results["errors"].append(error_msg)
+                    logger.error(f"❌ {error_msg}")
+
+            # 결과 판정
+            success = results["config_removed"] and len(results["errors"]) == 0
+
+            return {
+                "success": success,
+                "message": f"앱 삭제 {'완료' if success else '부분 완료'}: {app_name}",
+                "details": results,
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 앱 및 컨테이너 삭제 실패: {str(e)}")
+            return {"success": False, "message": f"삭제 실패: {str(e)}"}

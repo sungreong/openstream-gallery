@@ -242,6 +242,7 @@ def deploy_app_task(self, app_id: int, image_name: str, env_vars: Optional[Dict[
 
         app.status = "running"
         app.container_id = container_id
+        app.container_name = container_name
         app.port = port
         app.last_deployed_at = datetime.now()
         db.commit()
@@ -359,6 +360,7 @@ def stop_app_task(self, app_id: int) -> Dict[str, Any]:
         # 앱 상태를 중지됨으로 업데이트
         app.status = "stopped"
         app.container_id = None
+        app.container_name = None
         app.port = None
         db.commit()
 

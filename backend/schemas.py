@@ -61,6 +61,7 @@ class AppResponse(AppBase):
     user_id: int
     status: str
     container_id: Optional[str] = None
+    container_name: Optional[str] = None
     port: Optional[int] = None
     subdomain: Optional[str] = None
     base_dockerfile_type: str = "auto"
