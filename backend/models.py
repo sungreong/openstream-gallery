@@ -29,6 +29,8 @@ class App(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     git_credential_id = Column(Integer, ForeignKey("git_credentials.id"), nullable=True)
     base_dockerfile_type = Column(String(20), default="auto")  # auto, minimal, py311, py310
+    custom_base_image = Column(String(200))  # 사용자 정의 베이스 Docker 이미지
+    custom_dockerfile_commands = Column(Text)  # 사용자 정의 Docker 명령어들
     status = Column(String(20), default="stopped")  # stopped, building, deploying, running, error, stopping
     container_id = Column(String(100))
     image_name = Column(String(200))  # Docker 이미지 이름

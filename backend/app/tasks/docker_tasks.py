@@ -21,6 +21,8 @@ def build_image_task(
     branch: str,
     main_file: str,
     base_dockerfile_type: str = "auto",
+    custom_commands: str = None,
+    custom_base_image: str = None,
     git_credential: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """
@@ -75,14 +77,22 @@ def build_image_task(
         )
 
         image_name = f"streamlit-app-{app_id}"
-        build_logs = asyncio.run(
-            docker_service.build_image(
-                repo_path=temp_dir,
-                image_name=image_name,
-                main_file=main_file,
-                base_dockerfile_type=base_dockerfile_type,
-            )
-        )
+
+        # build_image 호출 시 파라미터를 명시적으로 처리
+        build_kwargs = {
+            "repo_path": temp_dir,
+            "image_name": image_name,
+            "main_file": main_file,
+            "base_dockerfile_type": base_dockerfile_type,
+        }
+
+        # 선택적 파라미터 추가
+        if custom_commands is not None:
+            build_kwargs["custom_commands"] = custom_commands
+        if custom_base_image is not None:
+            build_kwargs["custom_base_image"] = custom_base_image
+
+        build_logs = asyncio.run(docker_service.build_image(**build_kwargs))
 
         logger.info(f"✅ 이미지 빌드 완료: {image_name}")
 
@@ -194,7 +204,7 @@ def deploy_app_task(self, app_id: int, image_name: str, env_vars: Optional[Dict[
 
         container_id = asyncio.run(
             docker_service.run_container(
-                image_name=image_name, container_name=container_name, port=port, env_vars=env_vars
+                image_name=image_name, container_name=container_name, port=port, env_vars=env_vars, app_id=app_id
             )
         )
 

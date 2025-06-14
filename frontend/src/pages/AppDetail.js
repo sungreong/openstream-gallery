@@ -27,6 +27,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
+// 앱 URL 생성 함수
+const getAppUrl = (subdomain) => {
+  const baseUrl = process.env.REACT_APP_BASE_URL || 'http://localhost:1234';
+  return `${baseUrl}/${subdomain}/`;
+};
+
 const AppDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -41,6 +47,8 @@ const AppDetail = () => {
     branch: '',
     main_file: '',
     base_dockerfile_type: '',
+    custom_base_image: '',
+    custom_dockerfile_commands: '',
     git_credential_id: '',
   });
 
@@ -276,6 +284,8 @@ const AppDetail = () => {
       branch: app.branch,
       main_file: app.main_file,
       base_dockerfile_type: app.base_dockerfile_type,
+      custom_base_image: app.custom_base_image || '',
+      custom_dockerfile_commands: app.custom_dockerfile_commands || '',
       git_credential_id: app.git_credential_id || '',
     });
     setIsEditing(true);
@@ -290,6 +300,8 @@ const AppDetail = () => {
       branch: '',
       main_file: '',
       base_dockerfile_type: '',
+      custom_base_image: '',
+      custom_dockerfile_commands: '',
       git_credential_id: '',
     });
   };
@@ -414,12 +426,12 @@ const AppDetail = () => {
               <Alert severity="success" sx={{ mb: 2 }}>
                 앱이 실행 중입니다: 
                 <a 
-                  href={`/${app.subdomain}/`} 
+                  href={getAppUrl(app.subdomain)} 
                   target="_blank" 
                   rel="noopener noreferrer"
                   style={{ marginLeft: 8 }}
                 >
-                  /{app.subdomain}/
+                  {getAppUrl(app.subdomain)}
                 </a>
               </Alert>
             )}
@@ -673,12 +685,12 @@ const AppDetail = () => {
                   </Typography>
                   <Box display="flex" alignItems="center" gap={1}>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      /{app.subdomain}/
+                      {getAppUrl(app.subdomain)}
                     </Typography>
                     <Button
                       size="small"
                       startIcon={<OpenInNew />}
-                      onClick={() => window.open(`/${app.subdomain}/`, '_blank')}
+                      onClick={() => window.open(getAppUrl(app.subdomain), '_blank')}
                     >
                       열기
                     </Button>
@@ -801,6 +813,22 @@ const AppDetail = () => {
                 </FormControl>
               </Grid>
               <Grid item xs={12} sm={6}>
+                <TextField
+                  label="사용자 정의 베이스 이미지 (선택사항)"
+                  value={editFormData.custom_base_image}
+                  onChange={(e) => handleEditFormChange('custom_base_image', e.target.value)}
+                  fullWidth
+                  placeholder="예: python:3.11-slim, ubuntu:22.04"
+                  helperText="Docker Hub의 이미지명:태그 형식"
+                  sx={{
+                    '& .MuiInputBase-input': {
+                      fontFamily: 'monospace',
+                      fontSize: '0.875rem',
+                    },
+                  }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
                   <InputLabel>Git 인증 정보</InputLabel>
                   <Select
@@ -816,6 +844,27 @@ const AppDetail = () => {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="사용자 정의 Docker 명령어 (선택사항)"
+                  value={editFormData.custom_dockerfile_commands}
+                  onChange={(e) => handleEditFormChange('custom_dockerfile_commands', e.target.value)}
+                  fullWidth
+                  multiline
+                  rows={6}
+                  helperText="베이스 이미지에 추가로 실행할 Docker 명령어를 입력하세요."
+                  placeholder={`# 예시:
+RUN apt-get update && apt-get install -y curl
+RUN pip install --no-cache-dir pandas numpy
+ENV MY_CUSTOM_VAR=value`}
+                  sx={{
+                    '& .MuiInputBase-input': {
+                      fontFamily: 'monospace',
+                      fontSize: '0.875rem',
+                    },
+                  }}
+                />
               </Grid>
             </Grid>
           </Box>

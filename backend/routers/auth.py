@@ -53,8 +53,21 @@ def get_user_by_email(db: Session, email: str):
 def authenticate_user(db: Session, username: str, password: str):
     user = get_user_by_username(db, username)
     if not user:
+        print(f"User not found: {username}")
         return False
+
+    # admin 계정인 경우 비밀번호 해시 확인 (덮어쓰기 제거)
+    # if username == "admin":
+    #     new_hash = get_password_hash("admin123")
+    #     print(f"Current hash: {user.password_hash}")
+    #     print(f"New hash: {new_hash}")
+    #     print(f"Password verification result: {verify_password('admin123', user.password_hash)}")
+    #     user.password_hash = new_hash
+    #     db.commit()
+    #     print("Admin password updated")
+
     if not verify_password(password, user.password_hash):
+        print(f"Password verification failed for user: {username}")
         return False
     return user
 

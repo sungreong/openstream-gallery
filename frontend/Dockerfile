@@ -15,4 +15,7 @@ COPY . .
 EXPOSE 3000
 
 # 개발 서버 실행
-CMD ["npm", "start"] 
+CMD ["npm", "start"]
+
+ENV REACT_APP_API_URL=http://localhost:8000/api
+ENV REACT_APP_BASE_URL=http://localhost:1234 

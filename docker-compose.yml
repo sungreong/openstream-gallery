@@ -17,6 +17,11 @@ services:
     ports:
       - "5432:5432"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
   # FastAPI 백엔드
   backend:
@@ -28,20 +33,25 @@ services:
       DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/streamlit_platform
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      DOCKER_HOST: unix:///var/run/docker.sock
+      SECRET_KEY: your_secret_key_here_in_production
+      JWT_SECRET_KEY: your_jwt_secret_key_here_in_production
       DOCKER_NETWORK_NAME: open-streamlit-gallery_streamlit_network
+      APP_BASE_URL: http://localhost:1234
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:rw
       - app_storage:/app/storage
       - ./nginx/conf.d/dynamic:/app/nginx_config
       - ./backend/dockerfiles:/app/dockerfiles:ro
+      - ./backend:/app:rw
     networks:
       - streamlit_network
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
     privileged: true
     user: root
@@ -55,7 +65,12 @@ services:
       dockerfile: Dockerfile
     container_name: streamlit_platform_frontend
     environment:
-      REACT_APP_API_URL: ""
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_BASE_URL=http://localhost:1234
+    volumes:
+      - ./frontend/src:/app/src:rw
+      - ./frontend/public:/app/public:rw
+      - /app/node_modules  # node_modules는 컨테이너 내부 것을 사용
     networks:
       - streamlit_network
     ports:
@@ -94,11 +109,14 @@ services:
       - app_storage:/app/storage
       - ./nginx/conf.d/dynamic:/app/nginx_config
       - ./backend/dockerfiles:/app/dockerfiles:ro
+      - ./backend:/app:rw
     networks:
       - streamlit_network
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
     privileged: true
     user: root
@@ -121,8 +139,10 @@ services:
     networks:
       - streamlit_network
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
     command: celery -A app.celery_app beat --loglevel=info
 

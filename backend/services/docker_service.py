@@ -368,7 +368,14 @@ class DockerService:
         except Exception as e:
             logger.warning(f"⚠️ 디렉토리 내용 확인 실패: {str(e)}")
 
-    def generate_dockerfile(self, repo_path: str, main_file: str, base_dockerfile_type: str = "auto") -> str:
+    def generate_dockerfile(
+        self,
+        repo_path: str,
+        main_file: str,
+        base_dockerfile_type: str = "auto",
+        custom_commands: str = None,
+        custom_base_image: str = None,
+    ) -> str:
         """동적으로 Dockerfile을 생성 (개선된 템플릿 시스템 사용)"""
 
         # requirements.txt 파일 존재 여부 및 내용 분석
@@ -391,33 +398,44 @@ class DockerService:
         else:
             logger.info(f"📋 requirements.txt 파일 없음")
 
-        # 베이스 Dockerfile 선택 및 읽기 (간단 버전)
-        if base_dockerfile_type == "auto":
-            selected_type = "simple"  # 기본값으로 간단한 버전 사용 (numpy 문제 방지)
-            logger.info(f"🤖 자동 선택된 베이스 Dockerfile: {selected_type}")
+        # 사용자 정의 베이스 이미지 사용 여부 확인
+        if custom_base_image and custom_base_image.strip():
+            logger.info(f"🐳 사용자 정의 베이스 이미지 사용: {custom_base_image}")
+            # 사용자 정의 베이스 이미지로 완전한 Dockerfile 생성
+            dockerfile_content = self._generate_custom_base_dockerfile(
+                custom_base_image, main_file, has_requirements, custom_commands
+            )
         else:
-            selected_type = base_dockerfile_type
-            logger.info(f"👤 사용자 선택 베이스 Dockerfile: {selected_type}")
+            # 기존 베이스 Dockerfile 선택 및 읽기
+            if base_dockerfile_type == "auto":
+                selected_type = "simple"  # 기본값으로 간단한 버전 사용 (numpy 문제 방지)
+                logger.info(f"🤖 자동 선택된 베이스 Dockerfile: {selected_type}")
+            else:
+                selected_type = base_dockerfile_type
+                logger.info(f"👤 사용자 선택 베이스 Dockerfile: {selected_type}")
 
-        base_dockerfile_content = self._read_base_dockerfile(selected_type)
+            base_dockerfile_content = self._read_base_dockerfile(selected_type)
 
-        # 앱별 추가 내용 생성 (간단 버전)
-        app_specific_content = self._generate_app_specific_content(main_file, has_requirements, problematic_packages)
+            # 앱별 추가 내용 생성
+            app_specific_content = self._generate_app_specific_content(
+                main_file, has_requirements, problematic_packages, custom_commands
+            )
 
-        # 최종 Dockerfile 내용 조합
-        from datetime import datetime
-
-        # 베이스 Dockerfile + 앱별 내용 조합
-        dockerfile_content = base_dockerfile_content + "\n\n" + app_specific_content
+            # 최종 Dockerfile 내용 조합
+            dockerfile_content = base_dockerfile_content + "\n\n" + app_specific_content
 
         # 메타데이터 추가
+        from datetime import datetime
+
         dockerfile_content = dockerfile_content.replace(
             "# 메타데이터",
             f"""# 메타데이터
 LABEL app.main_file="{main_file}"
 LABEL app.created="{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 LABEL app.requirements_count="{len(requirements_lines)}"
-LABEL app.problematic_packages="{len(problematic_packages)}\"""",
+LABEL app.problematic_packages="{len(problematic_packages)}"
+LABEL app.has_custom_commands="{'true' if custom_commands else 'false'}"
+LABEL app.custom_base_image="{'true' if custom_base_image else 'false'}\"""",
         )
 
         # Dockerfile 저장
@@ -426,11 +444,15 @@ LABEL app.problematic_packages="{len(problematic_packages)}\"""",
             f.write(dockerfile_content)
 
         logger.info(f"📝 Dockerfile 생성 완료")
-        logger.info(f"  - 베이스 Dockerfile: {selected_type}")
+        if custom_base_image:
+            logger.info(f"  - 사용자 정의 베이스 이미지: {custom_base_image}")
+        else:
+            logger.info(f"  - 베이스 Dockerfile: {selected_type if 'selected_type' in locals() else 'unknown'}")
         logger.info(f"  - 메인 파일: {main_file}")
         logger.info(f"  - requirements.txt: {'있음' if has_requirements else '없음'}")
         logger.info(f"  - 패키지 수: {len(requirements_lines)}개")
         logger.info(f"  - 컴파일 패키지: {len(problematic_packages)}개")
+        logger.info(f"  - 사용자 정의 명령어: {'있음' if custom_commands else '없음'}")
 
         return dockerfile_path
 
@@ -513,7 +535,7 @@ EXPOSE 8501
 RUN useradd -m -u 1000 streamlit && chown -R streamlit:streamlit /app"""
 
     def _generate_app_specific_content(
-        self, main_file: str, has_requirements: bool, problematic_packages: list
+        self, main_file: str, has_requirements: bool, problematic_packages: list, custom_commands: str = None
     ) -> str:
         """앱별 추가 내용 생성 (간단 버전)"""
         content_parts = []
@@ -525,6 +547,16 @@ RUN useradd -m -u 1000 streamlit && chown -R streamlit:streamlit /app"""
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt"""
             )
+
+        # 사용자 정의 Docker 명령어 추가
+        if custom_commands and custom_commands.strip():
+            logger.info(f"🔧 사용자 정의 Docker 명령어 추가 중...")
+            content_parts.append(
+                f"""
+# 사용자 정의 Docker 명령어
+{custom_commands.strip()}"""
+            )
+            logger.info(f"✅ 사용자 정의 명령어 추가 완료")
 
         content_parts.append(
             """
@@ -554,8 +586,79 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
 
         return "\n".join(content_parts)
 
+    def _generate_custom_base_dockerfile(
+        self, custom_base_image: str, main_file: str, has_requirements: bool, custom_commands: str = None
+    ) -> str:
+        """사용자 정의 베이스 이미지로 완전한 Dockerfile 생성"""
+        content_parts = []
+
+        # 베이스 이미지 설정
+        content_parts.append(f"FROM {custom_base_image}")
+        content_parts.append("")
+        content_parts.append("# 메타데이터")
+        content_parts.append("")
+
+        # 사용자 정의 명령어 (베이스 이미지 다음에 바로 실행)
+        if custom_commands and custom_commands.strip():
+            logger.info(f"🔧 사용자 정의 Docker 명령어 추가 중...")
+            # FROM 명령어가 이미 포함되어 있다면 제거
+            cleaned_commands = custom_commands.strip()
+            lines = cleaned_commands.split("\n")
+            filtered_lines = []
+            for line in lines:
+                stripped_line = line.strip()
+                if not stripped_line.startswith("FROM "):
+                    filtered_lines.append(line)
+
+            if filtered_lines:
+                content_parts.append("# 사용자 정의 Docker 명령어")
+                content_parts.append("\n".join(filtered_lines))
+                content_parts.append("")
+            logger.info(f"✅ 사용자 정의 명령어 추가 완료")
+
+        # requirements.txt 처리
+        if has_requirements:
+            content_parts.append("# requirements.txt 복사 및 설치")
+            content_parts.append("COPY requirements.txt .")
+            content_parts.append("RUN pip install --no-cache-dir -r requirements.txt")
+            content_parts.append("")
+
+        # 애플리케이션 파일 복사
+        content_parts.append("# 애플리케이션 파일 복사")
+        content_parts.append("COPY . .")
+        content_parts.append("")
+
+        # 불필요한 파일 제거
+        content_parts.append("# 불필요한 파일 제거")
+        content_parts.append('RUN find . -name "*.pyc" -delete && \\')
+        content_parts.append('    find . -name "__pycache__" -type d -exec rm -rf {} + || true')
+        content_parts.append("")
+
+        # 포트 노출
+        content_parts.append("# 포트 노출")
+        content_parts.append("EXPOSE 8501")
+        content_parts.append("")
+
+        # 실행 명령어
+        backslash = "\\"
+        content_parts.append("# 실행 명령어")
+        content_parts.append(f'ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}')
+        content_parts.append(f'    "--server.port=8501", {backslash}')
+        content_parts.append(f'    "--server.address=0.0.0.0", {backslash}')
+        content_parts.append(f'    "--server.headless=true", {backslash}')
+        content_parts.append(f'    "--server.enableCORS=false", {backslash}')
+        content_parts.append(f'    "--server.enableXsrfProtection=false"]')
+
+        return "\n".join(content_parts)
+
     async def build_image(
-        self, repo_path: str, image_name: str, main_file: str, base_dockerfile_type: str = "auto"
+        self,
+        repo_path: str,
+        image_name: str,
+        main_file: str,
+        base_dockerfile_type: str = "auto",
+        custom_commands: str = None,
+        custom_base_image: str = None,
     ) -> str:
         """Docker 이미지를 빌드"""
         self._ensure_docker_connection()
@@ -563,7 +666,11 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
         try:
             # Dockerfile 생성
             logger.info(f"📝 Dockerfile 생성 중... (메인파일: {main_file}, 베이스타입: {base_dockerfile_type})")
-            dockerfile_path = self.generate_dockerfile(repo_path, main_file, base_dockerfile_type)
+            if custom_commands:
+                logger.info(f"🔧 사용자 정의 명령어 포함")
+            dockerfile_path = self.generate_dockerfile(
+                repo_path, main_file, base_dockerfile_type, custom_commands, custom_base_image
+            )
             logger.info(f"✅ Dockerfile 생성 완료: {dockerfile_path}")
 
             # 생성된 Dockerfile 내용 일부 로깅
@@ -631,7 +738,7 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
             raise Exception(f"이미지 빌드 실패: {str(e)}")
 
     async def run_container(
-        self, image_name: str, container_name: str, port: int, env_vars: Dict[str, str] = None
+        self, image_name: str, container_name: str, port: int, env_vars: Dict[str, str] = None, app_id: int = None
     ) -> str:
         """컨테이너를 실행"""
         self._ensure_docker_connection()
@@ -641,6 +748,7 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
             logger.info(f"📦 이미지: {image_name}")
             logger.info(f"🏷️ 컨테이너명: {container_name}")
             logger.info(f"🌐 네트워크: {self.network_name}")
+            logger.info(f"🆔 앱 ID: {app_id}")
 
             if env_vars:
                 logger.info(f"🌍 환경변수: {len(env_vars)}개")
@@ -648,6 +756,19 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                     logger.info(f"  {key}={value[:50]}{'...' if len(value) > 50 else ''}")
                 if len(env_vars) > 5:
                     logger.info(f"  ... 및 {len(env_vars) - 5}개 더")
+
+            # Streamlit 앱 관리용 라벨 설정
+            labels = {
+                "app.type": "streamlit",
+                "app.platform": "open-streamlit-gallery",
+                "app.container_name": container_name,
+                "app.image": image_name,
+                "app.created_at": str(int(time.time())),
+            }
+
+            if app_id:
+                labels["app.id"] = str(app_id)
+                labels["app.name"] = container_name.replace("streamlit_app_", "")
 
             if self.use_cli:
                 # CLI를 사용한 컨테이너 관리
@@ -670,6 +791,11 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                     for key, value in env_vars.items():
                         env_args.extend(["-e", f"{key}={value}"])
 
+                # 라벨 설정
+                label_args = []
+                for key, value in labels.items():
+                    label_args.extend(["--label", f"{key}={value}"])
+
                 # 컨테이너 실행 (네트워크 포함)
                 cmd = (
                     [
@@ -685,6 +811,7 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                         "8501",
                     ]
                     + env_args
+                    + label_args
                     + [image_name]
                 )
 
@@ -710,6 +837,7 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                             f"{port}:8501",  # 기본 네트워크에서는 포트 바인딩 필요
                         ]
                         + env_args
+                        + label_args
                         + [image_name]
                     )
 
@@ -771,6 +899,7 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                     network=self.network_name,
                     detach=True,
                     restart_policy={"Name": "unless-stopped"},
+                    labels=labels,
                     # 내부 포트만 노출 (외부 포트 바인딩 없음)
                     expose=[8501],
                 )
@@ -812,6 +941,19 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                 return True
         except Exception as e:
             logger.error(f"컨테이너 제거 실패: {str(e)}")
+            return False
+
+    async def remove_image(self, image_name: str) -> bool:
+        """Docker 이미지를 제거"""
+        try:
+            if self.use_cli:
+                result = self._run_docker_command(["rmi", "-f", image_name])
+                return result.returncode == 0
+            else:
+                self.client.images.remove(image_name, force=True)
+                return True
+        except Exception as e:
+            logger.error(f"이미지 제거 실패: {str(e)}")
             return False
 
     async def get_container_logs(self, container_id: str, tail: int = 100) -> str:
@@ -860,6 +1002,8 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
         branch: str,
         main_file: str,
         base_dockerfile_type: str = "auto",
+        custom_commands: str = None,
+        custom_base_image: str = None,
         git_credential: Optional[Dict] = None,
     ) -> str:
         """
@@ -875,6 +1019,8 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
                 branch=branch,
                 main_file=main_file,
                 base_dockerfile_type=base_dockerfile_type,
+                custom_commands=custom_commands,
+                custom_base_image=custom_base_image,
                 git_credential=git_credential,
             )
 
@@ -967,3 +1113,135 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
         except Exception as e:
             logger.error(f"❌ 태스크 상태 조회 실패: {str(e)}")
             return {"task_id": task_id, "state": "UNKNOWN", "error": str(e)}
+
+    async def get_streamlit_apps(self) -> List[Dict]:
+        """현재 실행 중인 Streamlit 앱들의 목록을 반환"""
+        try:
+            self._ensure_docker_connection()
+
+            if self.use_cli:
+                # CLI를 사용하여 Streamlit 앱 컨테이너들 조회
+                result = self._run_docker_command(
+                    [
+                        "ps",
+                        "-a",
+                        "--filter",
+                        "label=app.type=streamlit",
+                        "--filter",
+                        "label=app.platform=open-streamlit-gallery",
+                        "--format",
+                        "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}|{{.CreatedAt}}|{{.Labels}}",
+                    ]
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"❌ Streamlit 앱 목록 조회 실패: {result.stderr}")
+                    return []
+
+                apps = []
+                for line in result.stdout.strip().split("\n"):
+                    if not line.strip():
+                        continue
+
+                    parts = line.split("|")
+                    if len(parts) >= 6:
+                        container_id = parts[0]
+                        name = parts[1]
+                        status = parts[2]
+                        image = parts[3]
+                        created_at = parts[4]
+                        labels_str = parts[5]
+
+                        # 라벨 파싱
+                        labels = {}
+                        for label_pair in labels_str.split(","):
+                            if "=" in label_pair:
+                                key, value = label_pair.split("=", 1)
+                                labels[key] = value
+
+                        app_info = {
+                            "container_id": container_id,
+                            "name": name,
+                            "status": status,
+                            "image": image,
+                            "created_at": created_at,
+                            "app_id": labels.get("app.id"),
+                            "app_name": labels.get("app.name", name),
+                            "labels": labels,
+                        }
+                        apps.append(app_info)
+
+                logger.info(f"📋 발견된 Streamlit 앱: {len(apps)}개")
+                return apps
+
+            else:
+                # SDK를 사용하여 Streamlit 앱 컨테이너들 조회
+                containers = self.client.containers.list(
+                    all=True, filters={"label": ["app.type=streamlit", "app.platform=open-streamlit-gallery"]}
+                )
+
+                apps = []
+                for container in containers:
+                    app_info = {
+                        "container_id": container.id,
+                        "name": container.name,
+                        "status": container.status,
+                        "image": container.image.tags[0] if container.image.tags else "unknown",
+                        "created_at": container.attrs["Created"],
+                        "app_id": container.labels.get("app.id"),
+                        "app_name": container.labels.get("app.name", container.name),
+                        "labels": container.labels,
+                    }
+                    apps.append(app_info)
+
+                logger.info(f"📋 발견된 Streamlit 앱: {len(apps)}개")
+                return apps
+
+        except Exception as e:
+            logger.error(f"❌ Streamlit 앱 목록 조회 실패: {str(e)}")
+            return []
+
+    async def get_app_by_id(self, app_id: int) -> Optional[Dict]:
+        """특정 앱 ID로 컨테이너 정보 조회"""
+        try:
+            apps = await self.get_streamlit_apps()
+            for app in apps:
+                if app.get("app_id") == str(app_id):
+                    return app
+            return None
+        except Exception as e:
+            logger.error(f"❌ 앱 ID {app_id} 조회 실패: {str(e)}")
+            return None
+
+    async def cleanup_orphaned_containers(self) -> int:
+        """고아 컨테이너들 정리 (DB에 없는 Streamlit 앱 컨테이너들)"""
+        try:
+            from models import App
+            from database import get_db
+
+            # DB에서 모든 앱 ID 조회
+            db = next(get_db())
+            db_app_ids = {str(app.id) for app in db.query(App).all()}
+            db.close()
+
+            # Docker에서 Streamlit 앱 컨테이너들 조회
+            docker_apps = await self.get_streamlit_apps()
+
+            cleaned_count = 0
+            for app in docker_apps:
+                app_id = app.get("app_id")
+                if app_id and app_id not in db_app_ids:
+                    logger.info(f"🧹 고아 컨테이너 발견: {app['name']} (App ID: {app_id})")
+                    try:
+                        await self.remove_container(app["container_id"])
+                        cleaned_count += 1
+                        logger.info(f"✅ 고아 컨테이너 제거 완료: {app['name']}")
+                    except Exception as e:
+                        logger.error(f"❌ 고아 컨테이너 제거 실패: {app['name']} - {str(e)}")
+
+            logger.info(f"🧹 고아 컨테이너 정리 완료: {cleaned_count}개 제거")
+            return cleaned_count
+
+        except Exception as e:
+            logger.error(f"❌ 고아 컨테이너 정리 실패: {str(e)}")
+            return 0

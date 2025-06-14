@@ -51,6 +51,8 @@ class AppUpdate(BaseModel):
     branch: Optional[str] = None
     main_file: Optional[str] = None
     base_dockerfile_type: Optional[str] = None
+    custom_base_image: Optional[str] = None
+    custom_dockerfile_commands: Optional[str] = None
     git_credential_id: Optional[int] = None
 
 
@@ -62,6 +64,8 @@ class AppResponse(AppBase):
     port: Optional[int] = None
     subdomain: Optional[str] = None
     base_dockerfile_type: str = "auto"
+    custom_base_image: Optional[str] = None
+    custom_dockerfile_commands: Optional[str] = None
     git_credential_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
@@ -156,3 +160,5 @@ class GitCredentialResponse(GitCredentialBase):
 class AppCreateWithAuth(AppBase):
     git_credential_id: Optional[int] = None
     base_dockerfile_type: str = "auto"  # auto, minimal, py311, py310
+    custom_base_image: Optional[str] = None  # 사용자 정의 베이스 Docker 이미지
+    custom_dockerfile_commands: Optional[str] = None  # 사용자 정의 Docker 명령어들

@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS apps (
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     git_credential_id INTEGER REFERENCES git_credentials(id) ON DELETE SET NULL,
     base_dockerfile_type VARCHAR(20) DEFAULT 'auto', -- auto, minimal, py311, py310, py309  
+    custom_base_image VARCHAR(200), -- 사용자 정의 베이스 Docker 이미지
+    custom_dockerfile_commands TEXT, -- 사용자 정의 Docker 명령어들
     status VARCHAR(20) DEFAULT 'stopped', -- stopped, building, running, error, deploying, stopping
     container_id VARCHAR(100),
     image_name VARCHAR(200),
@@ -78,7 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_deployments_app_id ON deployments(app_id);
 CREATE INDEX IF NOT EXISTS idx_app_env_vars_app_id ON app_env_vars(app_id);
 CREATE INDEX IF NOT EXISTS idx_git_credentials_user_id ON git_credentials(user_id);
 
--- 기본 사용자 생성 (개발용)
-INSERT INTO users (username, email, password_hash) 
-VALUES ('admin', 'admin@example.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj3QJK9.K7u.') -- password: admin123
-ON CONFLICT (username) DO NOTHING; 
+-- 기본 사용자 생성 (개발용) - 백엔드에서 자동 생성됨
+-- INSERT INTO users (username, email, password_hash) 
+-- VALUES ('admin', 'admin@example.com', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW') -- password: admin123
+-- ON CONFLICT (username) DO NOTHING; 

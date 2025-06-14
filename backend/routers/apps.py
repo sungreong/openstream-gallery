@@ -4,6 +4,7 @@ from typing import List
 import asyncio
 import uuid
 import re
+import os
 
 from database import get_db
 from models import User, App, Deployment, AppEnvVar, GitCredential
@@ -17,6 +18,9 @@ router = APIRouter(tags=["apps"])
 docker_service = DockerService()
 nginx_service = NginxService()
 crypto_service = CryptoService()
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def generate_subdomain(app_name: str) -> str:
@@ -31,11 +35,15 @@ def generate_subdomain(app_name: str) -> str:
     return f"{subdomain}-{unique_suffix}"
 
 
+def get_app_url(subdomain: str) -> str:
+    """앱의 완전한 접근 URL 생성"""
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:1234")
+    return f"{base_url}/{subdomain}/"
+
+
 async def deploy_app_background(app_id: int, db: Session, env_vars: dict = None):
     """백그라운드에서 앱 배포 실행"""
     import logging
-
-    logger = logging.getLogger(__name__)
 
     logger.info(f"🚀 앱 배포 시작 - App ID: {app_id}")
 
@@ -97,9 +105,17 @@ async def deploy_app_background(app_id: int, db: Session, env_vars: dict = None)
         logger.info(f"🔨 Docker 이미지 빌드 시작 - 이미지명: {image_name}, 메인파일: {app.main_file}")
         # 베이스 Dockerfile 타입 전달 (앱 생성 시 선택된 값 사용)
         base_dockerfile_type = getattr(app, "base_dockerfile_type", "auto")
+        custom_commands = getattr(app, "custom_dockerfile_commands", None)
+        custom_base_image = getattr(app, "custom_base_image", None)
         # print(base_dockerfile_type)
         logger.info(f"base_dockerfile_type: {base_dockerfile_type}")
-        build_logs = await docker_service.build_image(repo_path, image_name, app.main_file, base_dockerfile_type)
+        if custom_commands:
+            logger.info(f"🔧 사용자 정의 Docker 명령어 포함")
+        if custom_base_image:
+            logger.info(f"🐳 사용자 정의 베이스 이미지: {custom_base_image}")
+        build_logs = await docker_service.build_image(
+            repo_path, image_name, app.main_file, base_dockerfile_type, custom_commands, custom_base_image
+        )
         logger.info(f"✅ Docker 이미지 빌드 완료 - 로그 길이: {len(build_logs)} 문자")
 
         # 사용 가능한 포트 할당
@@ -123,7 +139,7 @@ async def deploy_app_background(app_id: int, db: Session, env_vars: dict = None)
         # 컨테이너 실행
         container_name = f"streamlit_app_{app.id}"
         logger.info(f"🐳 Docker 컨테이너 실행 시작 - 컨테이너명: {container_name}")
-        container_id = await docker_service.run_container(image_name, container_name, port, app_env_vars)
+        container_id = await docker_service.run_container(image_name, container_name, port, app_env_vars, app_id)
         logger.info(f"✅ Docker 컨테이너 실행 완료 - 컨테이너 ID: {container_id[:12]}...")
 
         # Nginx 설정 추가
@@ -211,6 +227,8 @@ async def create_app(
         user_id=current_user.id,
         git_credential_id=app.git_credential_id,
         base_dockerfile_type=app.base_dockerfile_type,
+        custom_base_image=app.custom_base_image,
+        custom_dockerfile_commands=app.custom_dockerfile_commands,
         subdomain=subdomain,
     )
 
@@ -341,6 +359,8 @@ async def deploy_app(
             branch=app.branch,
             main_file=app.main_file,
             base_dockerfile_type=base_dockerfile_type,
+            custom_commands=app.custom_dockerfile_commands,
+            custom_base_image=app.custom_base_image,
             git_credential=git_credential_data,
         )
 
@@ -353,7 +373,7 @@ async def deploy_app(
             "app_id": app_id,
             "build_task_id": build_task_id,
             "status": "building",
-            "app_url": f"/{app.subdomain}/",
+            "app_url": get_app_url(app.subdomain),
         }
 
     except Exception as e:
@@ -644,3 +664,48 @@ async def cancel_task(
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"태스크 취소 실패: {str(e)}")
+
+
+@router.get("/docker/running")
+async def get_running_docker_apps(current_user: User = Depends(get_current_user)):
+    """Docker에서 실행 중인 Streamlit 앱들 조회"""
+    try:
+        docker_apps = await docker_service.get_streamlit_apps()
+
+        return {"success": True, "data": docker_apps, "total": len(docker_apps)}
+    except Exception as e:
+        logger.error(f"Docker 앱 목록 조회 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Docker 앱 목록 조회 실패: {str(e)}")
+
+
+@router.post("/docker/cleanup")
+async def cleanup_orphaned_containers(current_user: User = Depends(get_current_user)):
+    """고아 컨테이너들 정리"""
+    try:
+        cleaned_count = await docker_service.cleanup_orphaned_containers()
+
+        return {
+            "success": True,
+            "message": f"{cleaned_count}개의 고아 컨테이너를 정리했습니다.",
+            "cleaned_count": cleaned_count,
+        }
+    except Exception as e:
+        logger.error(f"고아 컨테이너 정리 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"고아 컨테이너 정리 실패: {str(e)}")
+
+
+@router.get("/docker/app/{app_id}")
+async def get_docker_app_by_id(app_id: int, current_user: User = Depends(get_current_user)):
+    """특정 앱 ID의 Docker 컨테이너 정보 조회"""
+    try:
+        app_info = await docker_service.get_app_by_id(app_id)
+
+        if not app_info:
+            raise HTTPException(status_code=404, detail="해당 앱의 Docker 컨테이너를 찾을 수 없습니다.")
+
+        return {"success": True, "data": app_info}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Docker 앱 조회 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Docker 앱 조회 실패: {str(e)}")
