@@ -96,6 +96,12 @@ const Dashboard = () => {
   const [selectedApps, setSelectedApps] = useState(new Set());
   const [bulkActionDialog, setBulkActionDialog] = useState({ open: false, action: '', apps: [] });
   
+  // 고아 컨테이너 관리 상태
+  const [orphanedContainers, setOrphanedContainers] = useState([]);
+  const [selectedOrphanedContainers, setSelectedOrphanedContainers] = useState(new Set());
+  const [orphanedContainersDialog, setOrphanedContainersDialog] = useState({ open: false });
+  const [orphanedContainersLoading, setOrphanedContainersLoading] = useState(false);
+  
   // 반응형 및 인증 관련
   const theme = useTheme();
   const { user } = useAuth();
@@ -166,11 +172,55 @@ const Dashboard = () => {
     }
   }, [apps]);
 
-  const handleCleanupOrphanedContainers = async () => {
+  // 고아 컨테이너 관련 함수들
+  const fetchOrphanedContainers = async () => {
+    setOrphanedContainersLoading(true);
     try {
-      const response = await api.post('/api/apps/docker/cleanup');
+      const response = await api.get('/api/apps/docker/orphaned');
+      setOrphanedContainers(response.data.data);
+    } catch (error) {
+      console.error('고아 컨테이너 조회 실패:', error);
+      toast.error('고아 컨테이너 조회에 실패했습니다.');
+    } finally {
+      setOrphanedContainersLoading(false);
+    }
+  };
+
+  const handleOpenOrphanedContainersDialog = async () => {
+    setOrphanedContainersDialog({ open: true });
+    await fetchOrphanedContainers();
+  };
+
+  const handleSelectOrphanedContainer = (containerId, checked) => {
+    const newSelected = new Set(selectedOrphanedContainers);
+    if (checked) {
+      newSelected.add(containerId);
+    } else {
+      newSelected.delete(containerId);
+    }
+    setSelectedOrphanedContainers(newSelected);
+  };
+
+  const handleSelectAllOrphanedContainers = () => {
+    if (selectedOrphanedContainers.size === orphanedContainers.length) {
+      setSelectedOrphanedContainers(new Set());
+    } else {
+      setSelectedOrphanedContainers(new Set(orphanedContainers.map(container => container.container_id)));
+    }
+  };
+
+  const handleCleanupOrphanedContainers = async (selectedOnly = false) => {
+    try {
+      const containerIds = selectedOnly ? Array.from(selectedOrphanedContainers) : null;
+      const response = await api.post('/api/apps/docker/cleanup', containerIds);
+      
       toast.success(response.data.message);
-      fetchDockerApps(); // 목록 새로고침
+      
+      // 다이얼로그 닫고 목록 새로고침
+      setOrphanedContainersDialog({ open: false });
+      setSelectedOrphanedContainers(new Set());
+      fetchDockerApps();
+      
     } catch (error) {
       console.error('고아 컨테이너 정리 실패:', error);
       toast.error('고아 컨테이너 정리에 실패했습니다.');
@@ -695,8 +745,8 @@ const Dashboard = () => {
                     <Refresh />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="고아 컨테이너 정리">
-                  <IconButton onClick={handleCleanupOrphanedContainers} color="error">
+                <Tooltip title="고아 컨테이너 관리">
+                  <IconButton onClick={handleOpenOrphanedContainersDialog} color="error">
                     <CleaningServices />
                   </IconButton>
                 </Tooltip>
@@ -1155,6 +1205,157 @@ const Dashboard = () => {
           >
             {bulkActionDialog.action === 'stop' ? '중지 확인' : '삭제 확인'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 고아 컨테이너 관리 다이얼로그 */}
+      <Dialog 
+        open={orphanedContainersDialog.open} 
+        onClose={() => {
+          setOrphanedContainersDialog({ open: false });
+          setSelectedOrphanedContainers(new Set());
+        }}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <CleaningServices color="error" />
+            <Typography variant="h6">고아 컨테이너 관리</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            데이터베이스에 등록되지 않은 고아 컨테이너들을 선택적으로 정리할 수 있습니다.
+          </Typography>
+          
+          {orphanedContainersLoading ? (
+            <Box display="flex" justifyContent="center" py={4}>
+              <CircularProgress />
+            </Box>
+          ) : orphanedContainers.length === 0 ? (
+            <Box textAlign="center" py={4}>
+              <Typography variant="body1" color="text.secondary">
+                🎉 정리할 고아 컨테이너가 없습니다!
+              </Typography>
+            </Box>
+          ) : (
+            <>
+              {/* 선택 툴바 */}
+              <Box display="flex" alignItems="center" gap={2} mb={2} p={1} bgcolor="action.hover" borderRadius={1}>
+                <Checkbox
+                  indeterminate={selectedOrphanedContainers.size > 0 && selectedOrphanedContainers.size < orphanedContainers.length}
+                  checked={orphanedContainers.length > 0 && selectedOrphanedContainers.size === orphanedContainers.length}
+                  onChange={handleSelectAllOrphanedContainers}
+                />
+                <Typography variant="subtitle2">
+                  {selectedOrphanedContainers.size > 0 
+                    ? `${selectedOrphanedContainers.size}개 선택됨` 
+                    : '컨테이너 선택'
+                  }
+                </Typography>
+                <Button
+                  size="small"
+                  onClick={handleSelectAllOrphanedContainers}
+                  sx={{ ml: 'auto' }}
+                >
+                  {selectedOrphanedContainers.size === orphanedContainers.length ? '전체 해제' : '전체 선택'}
+                </Button>
+              </Box>
+
+              {/* 컨테이너 목록 */}
+              <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
+                <Table stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox">선택</TableCell>
+                      <TableCell>컨테이너 정보</TableCell>
+                      <TableCell>상태</TableCell>
+                      <TableCell>이미지</TableCell>
+                      <TableCell>생성일</TableCell>
+                      <TableCell>고아 사유</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {orphanedContainers.map((container) => (
+                      <TableRow key={container.container_id} hover>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={selectedOrphanedContainers.has(container.container_id)}
+                            onChange={(e) => handleSelectOrphanedContainer(container.container_id, e.target.checked)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Box>
+                            <Typography variant="subtitle2" fontWeight="bold">
+                              {container.app_name || container.name}
+                            </Typography>
+                            <Typography variant="caption" color="textSecondary" fontFamily="monospace">
+                              {container.container_id.substring(0, 12)}...
+                            </Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={getStatusText(container.status)} 
+                            color={getStatusColor(container.status)}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={container.image}>
+                            <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+                              {container.image}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {new Date(container.created_at).toLocaleString('ko-KR')}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="caption" color="warning.main">
+                            {container.orphan_reason || '미등록 컨테이너'}
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setOrphanedContainersDialog({ open: false });
+            setSelectedOrphanedContainers(new Set());
+          }}>
+            취소
+          </Button>
+          <Button onClick={fetchOrphanedContainers} disabled={orphanedContainersLoading}>
+            새로고침
+          </Button>
+          {orphanedContainers.length > 0 && (
+            <>
+              <Button 
+                onClick={() => handleCleanupOrphanedContainers(true)}
+                disabled={selectedOrphanedContainers.size === 0}
+                color="warning"
+                variant="outlined"
+              >
+                선택된 것만 정리 ({selectedOrphanedContainers.size}개)
+              </Button>
+              <Button 
+                onClick={() => handleCleanupOrphanedContainers(false)}
+                color="error"
+                variant="contained"
+              >
+                전체 정리 ({orphanedContainers.length}개)
+              </Button>
+            </>
+          )}
         </DialogActions>
       </Dialog>
     </Box>

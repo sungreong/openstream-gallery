@@ -1213,34 +1213,189 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
             logger.error(f"❌ 앱 ID {app_id} 조회 실패: {str(e)}")
             return None
 
-    async def cleanup_orphaned_containers(self) -> int:
-        """고아 컨테이너 정리 (데이터베이스에 없는 streamlit 컨테이너들)"""
+    async def get_orphaned_containers(self, db_session=None) -> List[Dict]:
+        """고아 컨테이너 목록 조회 (데이터베이스에 없는 streamlit 컨테이너들)"""
         try:
-            # 실행 중인 모든 streamlit 컨테이너 조회
-            result = self._run_docker_command(["ps", "-a", "--filter", "name=streamlit", "--format", "{{.Names}}"])
+            # 모든 streamlit 컨테이너 조회 (플랫폼 라벨로 필터링)
+            result = self._run_docker_command(
+                [
+                    "ps",
+                    "-a",
+                    "--filter",
+                    "label=app.platform=open-streamlit-gallery",
+                    "--format",
+                    "{{.ID}}|{{.Names}}|{{.Status}}|{{.Image}}|{{.CreatedAt}}|{{.Labels}}",
+                ]
+            )
 
             if result.returncode != 0:
                 logger.error(f"컨테이너 목록 조회 실패: {result.stderr}")
-                return 0
+                return []
 
-            running_containers = [name.strip() for name in result.stdout.split("\n") if name.strip()]
+            containers = []
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
 
-            # 데이터베이스에서 등록된 컨테이너 이름들 조회 (여기서는 간단히 처리)
-            # 실제로는 데이터베이스 세션을 받아서 처리해야 함
+                parts = line.split("|")
+                if len(parts) >= 6:
+                    container_id = parts[0]
+                    name = parts[1]
+                    status = parts[2]
+                    image = parts[3]
+                    created_at = parts[4]
+                    labels_str = parts[5]
 
-            cleaned_count = 0
-            for container_name in running_containers:
-                # 컨테이너 이름 패턴 확인 (streamlit_app_* 또는 streamlit-app-*)
-                if "streamlit" in container_name and ("app" in container_name):
-                    logger.info(f"고아 컨테이너 발견: {container_name}")
-                    # 실제 정리는 관리자가 수동으로 확인 후 진행하도록 함
-                    cleaned_count += 1
+                    # 라벨 파싱
+                    labels = {}
+                    for label_pair in labels_str.split(","):
+                        if "=" in label_pair:
+                            key, value = label_pair.split("=", 1)
+                            labels[key] = value
 
-            return cleaned_count
+                    containers.append(
+                        {
+                            "container_id": container_id,
+                            "name": name,
+                            "status": status,
+                            "image": image,
+                            "created_at": created_at,
+                            "app_id": labels.get("app.id"),
+                            "app_name": labels.get("app.name", name),
+                            "labels": labels,
+                        }
+                    )
+
+            # 데이터베이스에서 등록된 앱들 조회
+            if db_session:
+                from models import App
+
+                registered_apps = db_session.query(App).all()
+                registered_app_ids = {str(app.id) for app in registered_apps}
+                registered_container_names = {app.container_name for app in registered_apps if app.container_name}
+
+                # 고아 컨테이너 필터링
+                orphaned_containers = []
+                for container in containers:
+                    app_id = container.get("app_id")
+                    container_name = container.get("name")
+
+                    is_orphaned = False
+
+                    # app_id가 있지만 데이터베이스에 없는 경우
+                    if app_id and app_id not in registered_app_ids:
+                        is_orphaned = True
+                        container["orphan_reason"] = f"앱 ID {app_id}가 데이터베이스에 없음"
+
+                    # app_id가 없거나 컨테이너 이름이 등록되지 않은 경우
+                    elif not app_id or container_name not in registered_container_names:
+                        is_orphaned = True
+                        container["orphan_reason"] = "앱 ID가 없거나 컨테이너 이름이 등록되지 않음"
+
+                    if is_orphaned:
+                        orphaned_containers.append(container)
+
+                logger.info(f"📋 총 컨테이너: {len(containers)}개, 고아 컨테이너: {len(orphaned_containers)}개")
+                return orphaned_containers
+            else:
+                # 데이터베이스 세션이 없으면 모든 컨테이너 반환
+                logger.warning("데이터베이스 세션이 없어 모든 컨테이너를 반환합니다.")
+                return containers
 
         except Exception as e:
-            logger.error(f"고아 컨테이너 정리 중 오류: {str(e)}")
-            return 0
+            logger.error(f"고아 컨테이너 조회 중 오류: {str(e)}")
+            return []
+
+    async def cleanup_orphaned_containers(self, container_ids: List[str] = None, db_session=None) -> Dict:
+        """고아 컨테이너 정리"""
+        try:
+            result = {
+                "total_processed": 0,
+                "successfully_removed": 0,
+                "failed_to_remove": 0,
+                "removed_containers": [],
+                "failed_containers": [],
+                "errors": [],
+            }
+
+            # 특정 컨테이너들만 정리하는 경우
+            if container_ids:
+                containers_to_remove = []
+                for container_id in container_ids:
+                    # 컨테이너 정보 조회
+                    inspect_result = self._run_docker_command(["inspect", "--format", "{{json .}}", container_id])
+                    if inspect_result.returncode == 0:
+                        import json
+
+                        container_data = json.loads(inspect_result.stdout)
+                        containers_to_remove.append(
+                            {
+                                "container_id": container_id,
+                                "name": container_data.get("Name", "").lstrip("/"),
+                                "status": container_data.get("State", {}).get("Status", "unknown"),
+                            }
+                        )
+            else:
+                # 모든 고아 컨테이너 조회
+                orphaned_containers = await self.get_orphaned_containers(db_session)
+                containers_to_remove = orphaned_containers
+
+            result["total_processed"] = len(containers_to_remove)
+
+            # 컨테이너 정리 실행
+            for container in containers_to_remove:
+                container_id = container["container_id"]
+                container_name = container["name"]
+
+                try:
+                    logger.info(f"🗑️ 고아 컨테이너 정리 중: {container_name} ({container_id})")
+
+                    # 컨테이너 중지 (실행 중인 경우)
+                    if container.get("status", "").lower() in ["running", "up"]:
+                        stop_result = self._run_docker_command(["stop", container_id])
+                        if stop_result.returncode != 0:
+                            logger.warning(f"⚠️ 컨테이너 중지 실패: {container_name}")
+
+                    # 컨테이너 제거
+                    remove_result = self._run_docker_command(["rm", "-f", container_id])
+
+                    if remove_result.returncode == 0:
+                        result["successfully_removed"] += 1
+                        result["removed_containers"].append({"container_id": container_id, "name": container_name})
+                        logger.info(f"✅ 고아 컨테이너 정리 완료: {container_name}")
+                    else:
+                        result["failed_to_remove"] += 1
+                        error_msg = f"컨테이너 제거 실패: {remove_result.stderr}"
+                        result["failed_containers"].append(
+                            {"container_id": container_id, "name": container_name, "error": error_msg}
+                        )
+                        result["errors"].append(error_msg)
+                        logger.error(f"❌ 고아 컨테이너 정리 실패: {container_name} - {error_msg}")
+
+                except Exception as e:
+                    result["failed_to_remove"] += 1
+                    error_msg = f"컨테이너 정리 중 예외 발생: {str(e)}"
+                    result["failed_containers"].append(
+                        {"container_id": container_id, "name": container_name, "error": error_msg}
+                    )
+                    result["errors"].append(error_msg)
+                    logger.error(f"❌ 고아 컨테이너 정리 예외: {container_name} - {error_msg}")
+
+            logger.info(
+                f"🎯 고아 컨테이너 정리 완료: 성공 {result['successfully_removed']}개, 실패 {result['failed_to_remove']}개"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"고아 컨테이너 정리 중 전체 오류: {str(e)}")
+            return {
+                "total_processed": 0,
+                "successfully_removed": 0,
+                "failed_to_remove": 0,
+                "removed_containers": [],
+                "failed_containers": [],
+                "errors": [str(e)],
+            }
 
     def get_system_info(self) -> Dict:
         """Docker 시스템 정보 조회"""

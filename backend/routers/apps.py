@@ -259,8 +259,13 @@ async def create_app(
 
 @router.get("/{app_id}", response_model=AppResponse)
 async def get_app(app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """특정 앱 조회"""
+    """특정 앱 조회 (소유자 또는 공개 앱)"""
+    # 먼저 소유자 확인
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    # 소유자가 아니면 공개 앱인지 확인
+    if not app:
+        app = db.query(App).filter(App.id == app_id, App.is_public == True).first()
 
     if not app:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
@@ -431,8 +436,13 @@ async def stop_app(app_id: int, current_user: User = Depends(get_current_user), 
 
 @router.get("/{app_id}/logs", response_model=AppLogsResponse)
 async def get_app_logs(app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """앱 로그 조회"""
+    """앱 로그 조회 (소유자 또는 공개 앱)"""
+    # 먼저 소유자 확인
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    # 소유자가 아니면 공개 앱인지 확인
+    if not app:
+        app = db.query(App).filter(App.id == app_id, App.is_public == True).first()
 
     if not app:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
@@ -450,7 +460,8 @@ async def get_app_logs(app_id: int, current_user: User = Depends(get_current_use
 async def get_task_status(
     app_id: int, task_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """Celery 태스크 상태 조회"""
+    """Celery 태스크 상태 조회 (소유자만 가능 - 보안상 이유)"""
+    # 태스크 정보는 민감한 정보이므로 소유자만 접근 가능
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
 
     if not app:
@@ -522,8 +533,13 @@ async def deploy_built_app(app_id: int, current_user: User = Depends(get_current
 async def get_container_status(
     app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """컨테이너 상태 조회"""
+    """컨테이너 상태 조회 (소유자 또는 공개 앱)"""
+    # 먼저 소유자 확인
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    # 소유자가 아니면 공개 앱인지 확인
+    if not app:
+        app = db.query(App).filter(App.id == app_id, App.is_public == True).first()
 
     if not app:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
@@ -593,7 +609,8 @@ async def get_container_status(
 async def get_celery_status(
     app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """앱의 모든 Celery 태스크 상태 조회"""
+    """앱의 모든 Celery 태스크 상태 조회 (소유자만 가능 - 보안상 이유)"""
+    # Celery 태스크 정보는 민감한 정보이므로 소유자만 접근 가능
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
 
     if not app:
@@ -696,25 +713,58 @@ async def get_running_docker_apps(current_user: User = Depends(get_current_user)
         raise HTTPException(status_code=500, detail=f"Docker 앱 목록 조회 실패: {str(e)}")
 
 
+@router.get("/docker/orphaned")
+async def get_orphaned_containers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """고아 컨테이너 목록 조회"""
+    try:
+        orphaned_containers = await docker_service.get_orphaned_containers(db)
+
+        return {"success": True, "data": orphaned_containers, "count": len(orphaned_containers)}
+    except Exception as e:
+        logger.error(f"고아 컨테이너 조회 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"고아 컨테이너 조회 실패: {str(e)}")
+
+
 @router.post("/docker/cleanup")
-async def cleanup_orphaned_containers(current_user: User = Depends(get_current_user)):
+async def cleanup_orphaned_containers(
+    container_ids: List[str] = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """고아 컨테이너들 정리"""
     try:
-        cleaned_count = await docker_service.cleanup_orphaned_containers()
+        # 관리자 권한 확인
+        if not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
 
-        return {
-            "success": True,
-            "message": f"{cleaned_count}개의 고아 컨테이너를 정리했습니다.",
-            "cleaned_count": cleaned_count,
-        }
+        cleanup_result = await docker_service.cleanup_orphaned_containers(container_ids, db)
+
+        if cleanup_result["successfully_removed"] > 0:
+            message = f"{cleanup_result['successfully_removed']}개의 고아 컨테이너를 정리했습니다."
+            if cleanup_result["failed_to_remove"] > 0:
+                message += f" ({cleanup_result['failed_to_remove']}개 실패)"
+        else:
+            message = "정리할 고아 컨테이너가 없거나 정리에 실패했습니다."
+
+        return {"success": True, "message": message, "result": cleanup_result}
     except Exception as e:
         logger.error(f"고아 컨테이너 정리 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"고아 컨테이너 정리 실패: {str(e)}")
 
 
 @router.get("/docker/app/{app_id}")
-async def get_docker_app_by_id(app_id: int, current_user: User = Depends(get_current_user)):
-    """특정 앱 ID의 Docker 컨테이너 정보 조회"""
+async def get_docker_app_by_id(
+    app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """특정 앱 ID의 Docker 컨테이너 정보 조회 (소유자 또는 공개 앱)"""
+    # 먼저 소유자 확인
+    app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    # 소유자가 아니면 공개 앱인지 확인
+    if not app:
+        app = db.query(App).filter(App.id == app_id, App.is_public == True).first()
+
+    if not app:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+
     try:
         app_info = await docker_service.get_app_by_id(app_id)
 
@@ -733,8 +783,13 @@ async def get_docker_app_by_id(app_id: int, current_user: User = Depends(get_cur
 async def get_app_realtime_status(
     app_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """앱의 실시간 상태 확인 (컨테이너 + Nginx + 접근성)"""
+    """앱의 실시간 상태 확인 (컨테이너 + Nginx + 접근성) - 소유자 또는 공개 앱"""
+    # 먼저 소유자 확인
     app = db.query(App).filter(App.id == app_id, App.user_id == current_user.id).first()
+
+    # 소유자가 아니면 공개 앱인지 확인
+    if not app:
+        app = db.query(App).filter(App.id == app_id, App.is_public == True).first()
 
     if not app:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")

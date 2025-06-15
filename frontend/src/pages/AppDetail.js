@@ -206,6 +206,21 @@ const AppDetail = () => {
     },
   });
 
+  // 공개 설정 토글 뮤테이션
+  const togglePublicMutation = useMutation({
+    mutationFn: async (isPublic) => {
+      const response = await axios.put(`/api/apps/${id}`, { is_public: isPublic });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      toast.success(data.is_public ? '앱이 공개되었습니다.' : '앱이 비공개로 설정되었습니다.');
+      queryClient.invalidateQueries({ queryKey: ['app', id] });
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || '공개 설정 변경에 실패했습니다.');
+    },
+  });
+
   // 태스크 취소 뮤테이션
   const cancelTaskMutation = useMutation({
     mutationFn: async (taskType) => {
@@ -384,6 +399,17 @@ const AppDetail = () => {
     }
   };
 
+  const handleTogglePublic = () => {
+    const newPublicState = !app.is_public;
+    const message = newPublicState 
+      ? '이 앱을 공개하시겠습니까? 다른 사용자들이 이 앱을 볼 수 있게 됩니다.'
+      : '이 앱을 비공개로 설정하시겠습니까?';
+    
+    if (window.confirm(message)) {
+      togglePublicMutation.mutate(newPublicState);
+    }
+  };
+
   // 태스크 진행 단계 정보
   const getTaskSteps = () => {
     if (!celeryStatus?.tasks) return [];
@@ -446,11 +472,25 @@ const AppDetail = () => {
                 <Typography variant="h4" gutterBottom>
                   {app.name}
                 </Typography>
-                <Chip
-                  label={getStatusText(app.status)}
-                  color={getStatusColor(app.status)}
-                  sx={{ mb: 2 }}
-                />
+                <Box display="flex" gap={1} mb={2}>
+                  <Chip
+                    label={getStatusText(app.status)}
+                    color={getStatusColor(app.status)}
+                  />
+                  <Chip
+                    label={app.is_public ? '공개 앱' : '비공개 앱'}
+                    color={app.is_public ? 'success' : 'default'}
+                    variant={app.is_public ? 'filled' : 'outlined'}
+                    onClick={handleTogglePublic}
+                    disabled={togglePublicMutation.isLoading}
+                    sx={{ 
+                      cursor: 'pointer',
+                      '&:hover': {
+                        backgroundColor: app.is_public ? 'success.dark' : 'action.hover'
+                      }
+                    }}
+                  />
+                </Box>
               </Box>
               <Box display="flex" gap={1}>
                 {app.status === 'running' ? (
@@ -498,6 +538,30 @@ const AppDetail = () => {
               {app.description || '설명이 없습니다.'}
             </Typography>
 
+            {app.is_public && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">
+                      🌍 이 앱은 공개 앱입니다
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      다른 사용자들도 대시보드에서 이 앱을 볼 수 있습니다.
+                    </Typography>
+                  </Box>
+                  <Button
+                    size="small"
+                    onClick={handleTogglePublic}
+                    disabled={togglePublicMutation.isLoading}
+                    color="warning"
+                    variant="outlined"
+                  >
+                    비공개로 설정
+                  </Button>
+                </Box>
+              </Alert>
+            )}
+
             {app.status === 'running' && (
               <Alert severity="success" sx={{ mb: 2 }}>
                 앱이 실행 중입니다: 
@@ -544,6 +608,30 @@ const AppDetail = () => {
                   fullWidth
                   InputProps={{ readOnly: true }}
                 />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Box>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    공개 설정
+                  </Typography>
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Switch
+                      checked={app.is_public || false}
+                      onChange={handleTogglePublic}
+                      disabled={togglePublicMutation.isLoading}
+                      color="success"
+                    />
+                    <Typography variant="body2" color="text.secondary">
+                      {app.is_public ? '공개됨' : '비공개'}
+                    </Typography>
+                    {togglePublicMutation.isLoading && (
+                      <CircularProgress size={16} />
+                    )}
+                  </Box>
+                  <Typography variant="caption" color="text.secondary">
+                    공개 앱은 다른 사용자들도 볼 수 있습니다
+                  </Typography>
+                </Box>
               </Grid>
             </Grid>
           </Paper>
