@@ -30,7 +30,10 @@ import {
   Select,
   MenuItem,
   Stack,
-  Badge
+  Badge,
+  useMediaQuery,
+  useTheme,
+  Collapse
 } from '@mui/material';
 import { 
   PlayArrow, 
@@ -57,6 +60,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 // 앱 URL 생성 함수
 const getAppUrl = (subdomain) => {
@@ -77,6 +81,14 @@ const Dashboard = () => {
   const [realtimeStatus, setRealtimeStatus] = useState({});
   const [lastStatusCheck, setLastStatusCheck] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [dockerSectionExpanded, setDockerSectionExpanded] = useState(false);
+  
+  // 반응형 및 인증 관련
+  const theme = useTheme();
+  const { user } = useAuth();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const isTablet = useMediaQuery(theme.breakpoints.down('lg'));
+  const isAdmin = user?.is_admin || false;
 
   useEffect(() => {
     fetchApps();
@@ -385,172 +397,212 @@ const Dashboard = () => {
         </Stack>
       </Box>
 
-      {/* 통계 카드들 */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
+      {/* 통계 카드들 - 반응형 레이아웃 */}
+      <Grid container spacing={isMobile ? 2 : 3} sx={{ mb: 4 }}>
+        <Grid item xs={6} sm={6} md={3}>
           <Card sx={{ height: '100%' }}>
-            <CardContent>
+            <CardContent sx={{ p: isMobile ? 2 : 3 }}>
               <Box display="flex" alignItems="center" justifyContent="space-between">
                 <Box>
-                  <Typography color="textSecondary" gutterBottom variant="h6">
+                  <Typography 
+                    color="textSecondary" 
+                    gutterBottom 
+                    variant={isMobile ? "body2" : "h6"}
+                  >
                     총 앱 수
                   </Typography>
-                  <Typography variant="h4">
+                  <Typography 
+                    variant={isMobile ? "h5" : "h4"} 
+                    color="primary.main"
+                  >
                     {apps.length}
                   </Typography>
                 </Box>
-                <AppsIcon color="primary" sx={{ fontSize: 40 }} />
+                <AppsIcon 
+                  color="primary" 
+                  sx={{ fontSize: isMobile ? 30 : 40 }} 
+                />
               </Box>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={6} sm={6} md={3}>
           <Card sx={{ height: '100%' }}>
-            <CardContent>
+            <CardContent sx={{ p: isMobile ? 2 : 3 }}>
               <Box display="flex" alignItems="center" justifyContent="space-between">
                 <Box>
-                  <Typography color="textSecondary" gutterBottom variant="h6">
-                    실행 중인 컨테이너
+                  <Typography 
+                    color="textSecondary" 
+                    gutterBottom 
+                    variant={isMobile ? "body2" : "h6"}
+                  >
+                    실행 중
                   </Typography>
-                  <Typography variant="h4" color="success.main">
+                  <Typography 
+                    variant={isMobile ? "h5" : "h4"} 
+                    color="success.main"
+                  >
                     {runningContainers}
                   </Typography>
                 </Box>
-                <PlayCircle color="success" sx={{ fontSize: 40 }} />
+                <PlayCircle 
+                  color="success" 
+                  sx={{ fontSize: isMobile ? 30 : 40 }} 
+                />
               </Box>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography color="textSecondary" gutterBottom variant="h6">
-                    중지된 컨테이너
-                  </Typography>
-                  <Typography variant="h4" color="warning.main">
-                    {stoppedContainers}
-                  </Typography>
-                </Box>
-                <PauseCircle color="warning" sx={{ fontSize: 40 }} />
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+        {!isMobile && (
+          <>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ height: '100%' }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" justifyContent="space-between">
+                    <Box>
+                      <Typography color="textSecondary" gutterBottom variant="h6">
+                        중지된 컨테이너
+                      </Typography>
+                      <Typography variant="h4" color="warning.main">
+                        {stoppedContainers}
+                      </Typography>
+                    </Box>
+                    <PauseCircle color="warning" sx={{ fontSize: 40 }} />
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box display="flex" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography color="textSecondary" gutterBottom variant="h6">
-                    총 Docker 앱
-                  </Typography>
-                  <Typography variant="h4" color="info.main">
-                    {dockerApps.length}
-                  </Typography>
-                </Box>
-                <Widgets color="info" sx={{ fontSize: 40 }} />
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ height: '100%' }}>
+                <CardContent>
+                  <Box display="flex" alignItems="center" justifyContent="space-between">
+                    <Box>
+                      <Typography color="textSecondary" gutterBottom variant="h6">
+                        총 Docker 앱
+                      </Typography>
+                      <Typography variant="h4" color="info.main">
+                        {dockerApps.length}
+                      </Typography>
+                    </Box>
+                    <Widgets color="info" sx={{ fontSize: 40 }} />
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          </>
+        )}
       </Grid>
 
-      {/* Docker 컨테이너 관리 섹션 */}
-      <Card sx={{ mb: 4 }}>
-        <CardContent>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-            <Typography variant="h5" component="h2">
-              🐳 Docker 컨테이너 관리
-            </Typography>
-            <Box>
-              <Tooltip title="새로고침">
-                <IconButton onClick={fetchDockerApps} disabled={dockerLoading}>
-                  <Refresh />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="고아 컨테이너 정리">
-                <IconButton onClick={handleCleanupOrphanedContainers} color="error">
-                  <CleaningServices />
-                </IconButton>
-              </Tooltip>
+      {/* Docker 컨테이너 관리 섹션 - 관리자 전용 */}
+      {isAdmin && (
+        <Card sx={{ mb: 4 }}>
+          <CardContent>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Box display="flex" alignItems="center" gap={1}>
+                <Typography variant="h5" component="h2">
+                  🐳 Docker 컨테이너 관리
+                </Typography>
+                <Chip label="관리자 전용" color="secondary" size="small" />
+                {!isMobile && (
+                  <Button
+                    size="small"
+                    onClick={() => setDockerSectionExpanded(!dockerSectionExpanded)}
+                    sx={{ ml: 1 }}
+                  >
+                    {dockerSectionExpanded ? '접기' : '펼치기'}
+                  </Button>
+                )}
+              </Box>
+              <Box>
+                <Tooltip title="새로고침">
+                  <IconButton onClick={fetchDockerApps} disabled={dockerLoading}>
+                    <Refresh />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="고아 컨테이너 정리">
+                  <IconButton onClick={handleCleanupOrphanedContainers} color="error">
+                    <CleaningServices />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </Box>
-          </Box>
 
-          {dockerLoading ? (
-            <Box display="flex" justifyContent="center" py={4}>
-              <CircularProgress />
-            </Box>
-          ) : dockerApps.length === 0 ? (
-            <Box textAlign="center" py={4}>
-              <Typography variant="body1" color="textSecondary">
-                실행 중인 Streamlit 앱이 없습니다.
-              </Typography>
-            </Box>
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>앱 정보</TableCell>
-                    <TableCell>상태</TableCell>
-                    <TableCell>이미지</TableCell>
-                    <TableCell>생성일</TableCell>
-                    <TableCell>컨테이너 ID</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {dockerApps.map((app) => (
-                    <TableRow key={app.container_id} hover>
-                      <TableCell>
-                        <Box>
-                          <Typography variant="subtitle2" fontWeight="bold">
-                            {app.app_name || app.name}
-                          </Typography>
-                          <Typography variant="caption" color="textSecondary">
-                            {app.app_id ? `App ID: ${app.app_id}` : '라벨 없음'}
-                          </Typography>
-                        </Box>
-                      </TableCell>
-                      <TableCell>
-                        <Chip 
-                          label={getStatusText(app.status)} 
-                          color={getStatusColor(app.status)}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Tooltip title={app.image}>
-                          <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                            {app.image}
-                          </Typography>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2">
-                          {new Date(app.created_at).toLocaleString('ko-KR')}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" fontFamily="monospace">
-                          {app.container_id.substring(0, 12)}...
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </CardContent>
-      </Card>
+            <Collapse in={isMobile || dockerSectionExpanded} timeout="auto" unmountOnExit>
+              {dockerLoading ? (
+                <Box display="flex" justifyContent="center" py={4}>
+                  <CircularProgress />
+                </Box>
+              ) : dockerApps.length === 0 ? (
+                <Box textAlign="center" py={4}>
+                  <Typography variant="body1" color="textSecondary">
+                    실행 중인 Streamlit 앱이 없습니다.
+                  </Typography>
+                </Box>
+              ) : (
+                <TableContainer component={Paper} variant="outlined">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>앱 정보</TableCell>
+                        <TableCell>상태</TableCell>
+                        <TableCell>이미지</TableCell>
+                        <TableCell>생성일</TableCell>
+                        <TableCell>컨테이너 ID</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {dockerApps.map((app) => (
+                        <TableRow key={app.container_id} hover>
+                          <TableCell>
+                            <Box>
+                              <Typography variant="subtitle2" fontWeight="bold">
+                                {app.app_name || app.name}
+                              </Typography>
+                              <Typography variant="caption" color="textSecondary">
+                                {app.app_id ? `App ID: ${app.app_id}` : '라벨 없음'}
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Chip 
+                              label={getStatusText(app.status)} 
+                              color={getStatusColor(app.status)}
+                              size="small"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Tooltip title={app.image}>
+                              <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+                                {app.image}
+                              </Typography>
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2">
+                              {new Date(app.created_at).toLocaleString('ko-KR')}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2" fontFamily="monospace">
+                              {app.container_id.substring(0, 12)}...
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Collapse>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 관리 카드들 */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
+      <Grid container spacing={isMobile ? 2 : 3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={4}>
           <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <CardContent sx={{ flexGrow: 1 }}>
@@ -643,19 +695,30 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       ) : (
-        <Grid container spacing={3}>
+        <Grid container spacing={isMobile ? 2 : 3}>
           {apps.map((app) => {
             const statusInfo = getActualStatusInfo(app);
             const realtimeInfo = realtimeStatus[app.id];
             
             return (
-              <Grid item xs={12} sm={6} md={4} key={app.id}>
+              <Grid item xs={12} sm={6} md={isTablet ? 6 : 4} key={app.id}>
                 <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                   <CardContent sx={{ flexGrow: 1 }}>
                     <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
-                      <Typography variant="h6" component="h3">
-                        {app.name}
-                      </Typography>
+                      <Box>
+                        <Typography variant="h6" component="h3">
+                          {app.name}
+                        </Typography>
+                        {app.is_public && (
+                          <Chip
+                            label="공개 앱"
+                            color="info"
+                            size="small"
+                            variant="outlined"
+                            sx={{ mt: 0.5 }}
+                          />
+                        )}
+                      </Box>
                       <Stack direction="row" spacing={1} alignItems="center">
                         <Badge
                           badgeContent={statusInfo.isRealtime ? '실시간' : ''}

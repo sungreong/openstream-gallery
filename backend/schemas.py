@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
@@ -20,15 +20,30 @@ class UserLogin(BaseModel):
 
 class UserResponse(UserBase):
     id: int
+    is_admin: bool = False
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    is_admin: Optional[bool] = None
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+# 관리자 전용 스키마
+class AdminStats(BaseModel):
+    total_users: int
+    total_apps: int
+    running_apps: int
+    docker_info: Dict[str, Any]
 
 
 # 앱 스키마
@@ -54,6 +69,7 @@ class AppUpdate(BaseModel):
     custom_base_image: Optional[str] = None
     custom_dockerfile_commands: Optional[str] = None
     git_credential_id: Optional[int] = None
+    is_public: Optional[bool] = None
 
 
 class AppResponse(AppBase):
@@ -68,6 +84,7 @@ class AppResponse(AppBase):
     custom_base_image: Optional[str] = None
     custom_dockerfile_commands: Optional[str] = None
     git_credential_id: Optional[int] = None
+    is_public: bool = False
     created_at: datetime
     updated_at: datetime
     last_deployed_at: Optional[datetime] = None

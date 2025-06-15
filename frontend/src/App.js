@@ -12,6 +12,7 @@ import CreateApp from './pages/CreateApp';
 import GitCredentials from './pages/GitCredentials';
 import NginxManagement from './pages/NginxManagement';
 import CeleryMonitor from './pages/CeleryMonitor';
+import AdminPanel from './pages/AdminPanel';
 
 function App() {
   const { user, loading } = useAuth();
@@ -56,6 +57,10 @@ function App() {
           <Route 
             path="/celery-monitor" 
             element={user ? <CeleryMonitor /> : <Navigate to="/login" />} 
+          />
+          <Route 
+            path="/admin" 
+            element={user?.is_admin ? <AdminPanel /> : <Navigate to="/dashboard" />} 
           />
           <Route 
             path="/" 

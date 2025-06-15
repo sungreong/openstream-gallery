@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from database import get_db, engine
 from models import Base
-from routers import apps, auth, deployments, git_credentials, dockerfiles, nginx, celery_monitor
+from routers import apps, auth, deployments, git_credentials, dockerfiles, nginx, celery_monitor, admin
 from services.docker_service import DockerService
 from services.nginx_service import NginxService
 
@@ -50,7 +50,7 @@ def create_admin_user():
             print("Admin 계정이 없습니다. 새로 생성합니다.")
             logger.info("Admin 계정이 없습니다. 새로 생성합니다.")
             admin_password_hash = get_password_hash("admin123")
-            admin = User(username="admin", email="admin@example.com", password_hash=admin_password_hash)
+            admin = User(username="admin", email="admin@example.com", password_hash=admin_password_hash, is_admin=True)
             db.add(admin)
             db.commit()
             db.refresh(admin)
@@ -97,9 +97,9 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://frontend:3000"],
+    allow_origins=["*"],  # 개발 환경에서는 모든 origin 허용
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -111,6 +111,7 @@ app.include_router(git_credentials.router, prefix="/api/git-credentials", tags=[
 app.include_router(dockerfiles.router, prefix="/api/dockerfiles", tags=["dockerfiles"])
 app.include_router(nginx.router, prefix="/api/nginx", tags=["nginx"])
 app.include_router(celery_monitor.router, prefix="/api/celery", tags=["celery-monitor"])
+app.include_router(admin.router, tags=["admin"])
 
 
 @app.on_event("startup")

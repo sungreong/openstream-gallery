@@ -94,6 +94,13 @@ async def get_current_user(
     return user
 
 
+async def get_current_admin_user(current_user: User = Depends(get_current_user)):
+    """관리자 권한이 있는 사용자만 허용"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
+    return current_user
+
+
 @router.post("/register", response_model=UserResponse)
 async def register(user: UserCreate, db: Session = Depends(get_db)):
     # 사용자명 중복 확인

@@ -9,7 +9,7 @@ import {
   Menu,
   MenuItem,
 } from '@mui/material';
-import { AccountCircle, Add, VpnKey, Settings, MonitorHeart } from '@mui/icons-material';
+import { AccountCircle, Add, VpnKey, Settings, MonitorHeart, AdminPanelSettings } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -77,6 +77,22 @@ const Navbar = () => {
             Celery 모니터
           </Button>
 
+          {user?.is_admin && (
+            <Button
+              color="inherit"
+              startIcon={<AdminPanelSettings />}
+              onClick={() => navigate('/admin')}
+              sx={{ 
+                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                '&:hover': {
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)'
+                }
+              }}
+            >
+              관리자 패널
+            </Button>
+          )}
+
           <div>
             <IconButton
               size="large"
@@ -105,7 +121,7 @@ const Navbar = () => {
             >
               <MenuItem disabled>
                 <Typography variant="body2">
-                  {user?.username}
+                  {user?.username} {user?.is_admin && '(관리자)'}
                 </Typography>
               </MenuItem>
               <MenuItem onClick={handleLogout}>로그아웃</MenuItem>

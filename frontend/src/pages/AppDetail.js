@@ -20,6 +20,13 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Switch,
+  FormControlLabel,
+  LinearProgress,
+  Stepper,
+  Step,
+  StepLabel,
+  StepContent,
 } from '@mui/material';
 import { PlayArrow, Stop, Delete, Refresh, Settings, OpenInNew, Edit, Save, Cancel } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -50,7 +57,12 @@ const AppDetail = () => {
     custom_base_image: '',
     custom_dockerfile_commands: '',
     git_credential_id: '',
+    is_public: false,
   });
+
+  // 자동 새로고침 상태
+  const [lastTaskState, setLastTaskState] = useState(null);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
   // 앱 정보 조회
   const { data: app, isLoading, error } = useQuery({
@@ -69,7 +81,7 @@ const AppDetail = () => {
       return response.data;
     },
     enabled: !!app,
-    refetchInterval: app?.status === 'running' ? 5000 : false,
+    refetchInterval: app?.status === 'running' ? 10000 : false, // 실행 중일 때만 10초마다
   });
 
   // 컨테이너 상태 조회
@@ -80,7 +92,7 @@ const AppDetail = () => {
       return response.data;
     },
     enabled: !!app,
-    refetchInterval: 10000, // 10초마다 갱신
+    refetchInterval: 15000, // 15초마다 갱신
   });
 
   // Celery 태스크 상태 조회
@@ -90,9 +102,28 @@ const AppDetail = () => {
       const response = await axios.get(`/api/apps/${id}/celery-status`);
       return response.data;
     },
-    enabled: !!app,
-    refetchInterval: app?.status === 'building' || app?.status === 'deploying' || app?.status === 'stopping' ? 3000 : false,
+    enabled: !!app && autoRefreshEnabled,
+    refetchInterval: (data) => {
+      // 활성 태스크가 있을 때만 자주 갱신
+      const hasActiveTasks = data?.tasks && Object.values(data.tasks).some(
+        task => task.state === 'PROGRESS' || task.state === 'PENDING'
+      );
+      return hasActiveTasks ? 3000 : 10000; // 활성 태스크 있으면 3초, 없으면 10초
+    },
   });
+
+  // 태스크 상태 변화 감지 및 자동 갱신
+  useEffect(() => {
+    if (celeryStatus?.tasks) {
+      const currentTaskState = JSON.stringify(celeryStatus.tasks);
+      if (lastTaskState && lastTaskState !== currentTaskState) {
+        // 태스크 상태가 변경되면 앱 정보와 컨테이너 정보도 갱신
+        queryClient.invalidateQueries({ queryKey: ['app', id] });
+        queryClient.invalidateQueries({ queryKey: ['container-status', id] });
+      }
+      setLastTaskState(currentTaskState);
+    }
+  }, [celeryStatus, lastTaskState, queryClient, id]);
 
   // Git 인증 정보 목록 조회 (편집 시 사용)
   const { data: gitCredentials = [] } = useQuery({
@@ -188,6 +219,20 @@ const AppDetail = () => {
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || '태스크 취소에 실패했습니다.');
+    },
+  });
+
+  // Nginx 리로드 뮤테이션
+  const nginxReloadMutation = useMutation({
+    mutationFn: async () => {
+      const response = await axios.post('/api/nginx/reload');
+      return response.data;
+    },
+    onSuccess: () => {
+      toast.success('Nginx가 성공적으로 리로드되었습니다.');
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Nginx 리로드에 실패했습니다.');
     },
   });
 
@@ -287,6 +332,7 @@ const AppDetail = () => {
       custom_base_image: app.custom_base_image || '',
       custom_dockerfile_commands: app.custom_dockerfile_commands || '',
       git_credential_id: app.git_credential_id || '',
+      is_public: app.is_public || false,
     });
     setIsEditing(true);
   };
@@ -303,6 +349,7 @@ const AppDetail = () => {
       custom_base_image: '',
       custom_dockerfile_commands: '',
       git_credential_id: '',
+      is_public: false,
     });
   };
 
@@ -337,6 +384,32 @@ const AppDetail = () => {
     }
   };
 
+  // 태스크 진행 단계 정보
+  const getTaskSteps = () => {
+    if (!celeryStatus?.tasks) return [];
+    
+    const tasks = Object.values(celeryStatus.tasks);
+    const buildTask = tasks.find(task => task.task_type === 'build');
+    const deployTask = tasks.find(task => task.task_type === 'deploy');
+    
+    return [
+      {
+        label: '빌드',
+        task: buildTask,
+        completed: buildTask?.state === 'SUCCESS',
+        active: buildTask?.state === 'PROGRESS' || buildTask?.state === 'PENDING',
+        error: buildTask?.state === 'FAILURE',
+      },
+      {
+        label: '배포',
+        task: deployTask,
+        completed: deployTask?.state === 'SUCCESS',
+        active: deployTask?.state === 'PROGRESS' || deployTask?.state === 'PENDING',
+        error: deployTask?.state === 'FAILURE',
+      },
+    ];
+  };
+
   if (isLoading) {
     return (
       <Box display="flex" justifyContent="center" mt={4}>
@@ -353,8 +426,11 @@ const AppDetail = () => {
     );
   }
 
+  const taskSteps = getTaskSteps();
+  const hasActiveTasks = taskSteps.some(step => step.active);
+
   return (
-    <Container maxWidth="lg">
+    <Container maxWidth="xl">
       <Box sx={{ mt: 2, mb: 4 }}>
         <Button onClick={() => navigate('/dashboard')}>
           ← 대시보드로 돌아가기
@@ -471,6 +547,145 @@ const AppDetail = () => {
               </Grid>
             </Grid>
           </Paper>
+
+          {/* 배포 프로세스 상태 - 가로 배치 */}
+          {(hasActiveTasks || app.status === 'building' || app.status === 'deploying') && (
+            <Paper sx={{ p: 3, mt: 3 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+                <Typography variant="h6">
+                  배포 프로세스
+                </Typography>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={autoRefreshEnabled}
+                      onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="자동 새로고침"
+                />
+              </Box>
+
+              <Grid container spacing={3}>
+                {taskSteps.map((step, index) => (
+                  <Grid item xs={12} md={6} key={step.label}>
+                    <Card sx={{ 
+                      height: '100%',
+                      backgroundColor: step.active ? '#fff3e0' : step.completed ? '#e8f5e8' : step.error ? '#ffebee' : '#fafafa',
+                      border: step.active ? '2px solid #ff9800' : 'none'
+                    }}>
+                      <CardContent>
+                        <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                          <Typography variant="h6" fontWeight="bold">
+                            {step.label}
+                          </Typography>
+                          <Chip
+                            label={
+                              step.completed ? '완료' :
+                              step.active ? '진행 중' :
+                              step.error ? '실패' : '대기'
+                            }
+                            color={
+                              step.completed ? 'success' :
+                              step.active ? 'warning' :
+                              step.error ? 'error' : 'default'
+                            }
+                            size="small"
+                          />
+                        </Box>
+
+                        {step.task && (
+                          <>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                              태스크 ID: {step.task.task_id}
+                            </Typography>
+
+                            {step.task.state === 'PROGRESS' && step.task.meta && (
+                              <Box>
+                                <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                                  <Typography variant="body2" color="text.secondary">
+                                    진행률: {step.task.meta.current}/{step.task.meta.total}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    {Math.round((step.task.meta.current / step.task.meta.total) * 100)}%
+                                  </Typography>
+                                </Box>
+                                <LinearProgress 
+                                  variant="determinate" 
+                                  value={(step.task.meta.current / step.task.meta.total) * 100}
+                                  sx={{ mb: 1 }}
+                                />
+                                <Typography variant="body2" color="text.secondary">
+                                  상태: {step.task.meta.status}
+                                </Typography>
+                              </Box>
+                            )}
+
+                            {step.task.state === 'FAILURE' && step.task.error && (
+                              <Typography variant="body2" color="error">
+                                오류: {step.task.error}
+                              </Typography>
+                            )}
+
+                            {(step.task.state === 'PROGRESS' || step.task.state === 'PENDING') && (
+                              <Button
+                                size="small"
+                                color="error"
+                                onClick={() => handleCancelTask(step.task.task_type)}
+                                disabled={cancelTaskMutation.isLoading}
+                                sx={{ mt: 2 }}
+                                fullWidth
+                              >
+                                취소
+                              </Button>
+                            )}
+                          </>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                ))}
+              </Grid>
+            </Paper>
+          )}
+
+          {/* 로그 - 가로 화면에서 더 넓게 표시 */}
+          <Paper sx={{ p: 3, mt: 3 }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6">
+                로그
+              </Typography>
+              <Button
+                size="small"
+                startIcon={<Refresh />}
+                onClick={() => queryClient.invalidateQueries({ queryKey: ['app-logs', id] })}
+                disabled={logsLoading}
+              >
+                새로고침
+              </Button>
+            </Box>
+            
+            <Box
+              sx={{
+                height: 500,
+                overflow: 'auto',
+                backgroundColor: '#f5f5f5',
+                p: 2,
+                borderRadius: 1,
+                fontFamily: 'monospace',
+                fontSize: '0.875rem',
+              }}
+            >
+              {logsLoading ? (
+                <CircularProgress size={20} />
+              ) : (
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {logs?.logs || '로그가 없습니다.'}
+                </pre>
+              )}
+            </Box>
+          </Paper>
         </Grid>
 
         {/* 사이드바 */}
@@ -581,96 +796,32 @@ const AppDetail = () => {
             )}
           </Paper>
 
-          {/* Celery 태스크 상태 */}
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6">
-                태스크 상태
-              </Typography>
-              <Button
-                size="small"
-                startIcon={<Refresh />}
-                onClick={() => queryClient.invalidateQueries({ queryKey: ['celery-status', id] })}
-                disabled={celeryLoading}
-              >
-                새로고침
-              </Button>
-            </Box>
-            
-            {celeryLoading ? (
-              <CircularProgress size={20} />
-            ) : celeryStatus?.tasks && Object.keys(celeryStatus.tasks).length > 0 ? (
-              <Box>
-                {Object.entries(celeryStatus.tasks).map(([taskKey, taskData]) => (
-                  <Box key={taskKey} mb={2} p={2} sx={{ backgroundColor: '#f5f5f5', borderRadius: 1 }}>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="body2" fontWeight="bold">
-                        {taskData.task_type === 'build' ? '빌드' : 
-                         taskData.task_type === 'deploy' ? '배포' : 
-                         taskData.task_type === 'stop' ? '중지' : taskData.task_type}
-                      </Typography>
-                      <Chip
-                        label={getTaskStatusText(taskData.state)}
-                        color={getTaskStatusColor(taskData.state)}
-                        size="small"
-                      />
-                    </Box>
-                    
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                      ID: {taskData.task_id}
-                    </Typography>
-                    
-                    {taskData.state === 'PROGRESS' && taskData.meta && (
-                      <Box>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          진행률: {taskData.meta.current}/{taskData.meta.total}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          상태: {taskData.meta.status}
-                        </Typography>
-                      </Box>
-                    )}
-                    
-                    {taskData.state === 'FAILURE' && taskData.error && (
-                      <Typography variant="body2" color="error" gutterBottom>
-                        오류: {taskData.error}
-                      </Typography>
-                    )}
-                    
-                    {(taskData.state === 'PROGRESS' || taskData.state === 'PENDING') && (
-                      <Button
-                        size="small"
-                        color="error"
-                        onClick={() => handleCancelTask(taskData.task_type)}
-                        disabled={cancelTaskMutation.isLoading}
-                        sx={{ mt: 1 }}
-                      >
-                        취소
-                      </Button>
-                    )}
-                  </Box>
-                ))}
-              </Box>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                실행 중인 태스크가 없습니다.
-              </Typography>
-            )}
-          </Paper>
-
           {/* Nginx 설정 정보 */}
           <Paper sx={{ p: 3, mb: 3 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="h6">
                 Nginx 설정
               </Typography>
-              <Button
-                size="small"
-                startIcon={<Settings />}
-                onClick={() => navigate('/nginx-management')}
-              >
-                관리
-              </Button>
+              <Box display="flex" gap={1}>
+                <Button
+                  size="small"
+                  startIcon={<Refresh />}
+                  onClick={() => nginxReloadMutation.mutate()}
+                  disabled={nginxReloadMutation.isLoading}
+                  color="primary"
+                  variant="outlined"
+                >
+                  {nginxReloadMutation.isLoading ? '리로드 중...' : '리로드'}
+                </Button>
+                <Button
+                  size="small"
+                  startIcon={<Settings />}
+                  onClick={() => navigate('/nginx-management')}
+                  variant="outlined"
+                >
+                  관리
+                </Button>
+              </Box>
             </Box>
             
             <Box>
@@ -706,42 +857,80 @@ const AppDetail = () => {
             </Box>
           </Paper>
 
-                    {/* 로그 */}
-          <Paper sx={{ p: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6">
-                로그
-              </Typography>
-              <Button
-                size="small"
-                startIcon={<Refresh />}
-                onClick={() => queryClient.invalidateQueries(['app-logs', id])}
-                disabled={logsLoading}
-              >
-                새로고침
-              </Button>
-            </Box>
-            
-            <Box
-              sx={{
-                height: 400,
-                overflow: 'auto',
-                backgroundColor: '#f5f5f5',
-                p: 2,
-                borderRadius: 1,
-                fontFamily: 'monospace',
-                fontSize: '0.875rem',
-              }}
-            >
-              {logsLoading ? (
+          {/* 기타 태스크 상태 */}
+          {celeryStatus?.tasks && Object.values(celeryStatus.tasks).some(task => task.task_type !== 'build' && task.task_type !== 'deploy') && (
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6">
+                  기타 태스크
+                </Typography>
+                <Button
+                  size="small"
+                  startIcon={<Refresh />}
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ['celery-status', id] })}
+                  disabled={celeryLoading}
+                >
+                  새로고침
+                </Button>
+              </Box>
+              
+              {celeryLoading ? (
                 <CircularProgress size={20} />
               ) : (
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                  {logs?.logs || '로그가 없습니다.'}
-                </pre>
+                <Box>
+                  {Object.entries(celeryStatus.tasks)
+                    .filter(([_, taskData]) => taskData.task_type !== 'build' && taskData.task_type !== 'deploy')
+                    .map(([taskKey, taskData]) => (
+                    <Box key={taskKey} mb={2} p={2} sx={{ backgroundColor: '#f5f5f5', borderRadius: 1 }}>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Typography variant="body2" fontWeight="bold">
+                          {taskData.task_type === 'stop' ? '중지' : taskData.task_type}
+                        </Typography>
+                        <Chip
+                          label={getTaskStatusText(taskData.state)}
+                          color={getTaskStatusColor(taskData.state)}
+                          size="small"
+                        />
+                      </Box>
+                      
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        ID: {taskData.task_id}
+                      </Typography>
+                      
+                      {taskData.state === 'PROGRESS' && taskData.meta && (
+                        <Box>
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            진행률: {taskData.meta.current}/{taskData.meta.total}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            상태: {taskData.meta.status}
+                          </Typography>
+                        </Box>
+                      )}
+                      
+                      {taskData.state === 'FAILURE' && taskData.error && (
+                        <Typography variant="body2" color="error" gutterBottom>
+                          오류: {taskData.error}
+                        </Typography>
+                      )}
+                      
+                      {(taskData.state === 'PROGRESS' || taskData.state === 'PENDING') && (
+                        <Button
+                          size="small"
+                          color="error"
+                          onClick={() => handleCancelTask(taskData.task_type)}
+                          disabled={cancelTaskMutation.isLoading}
+                          sx={{ mt: 1 }}
+                        >
+                          취소
+                        </Button>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
               )}
-            </Box>
-          </Paper>
+            </Paper>
+          )}
         </Grid>
       </Grid>
 
@@ -844,6 +1033,20 @@ const AppDetail = () => {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={editFormData.is_public || false}
+                      onChange={(e) => handleEditFormChange('is_public', e.target.checked)}
+                    />
+                  }
+                  label="공개 앱으로 설정"
+                />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  공개 앱으로 설정하면 다른 사용자들도 이 앱을 볼 수 있습니다.
+                </Typography>
               </Grid>
               <Grid item xs={12}>
                 <TextField

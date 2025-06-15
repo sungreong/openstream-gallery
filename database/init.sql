@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    is_admin BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS apps (
     build_task_id VARCHAR(100),
     deploy_task_id VARCHAR(100),
     stop_task_id VARCHAR(100),
+    is_public BOOLEAN DEFAULT FALSE NOT NULL, -- 공개 앱 여부
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_deployed_at TIMESTAMP

@@ -374,7 +374,7 @@ location ~ ^/{{ subdomain }}/(.*\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|tt
                     logger.error(f"stderr: {result.stderr}")
                     if result.stdout:
                         logger.error(f"stdout: {result.stdout}")
-                    raise Exception(f"Nginx 리로드 실패: {result.stderr}")
+                    return False
 
         except subprocess.TimeoutExpired:
             logger.error("⏰ Nginx 리로드 시간 초과")
@@ -386,7 +386,7 @@ location ~ ^/{{ subdomain }}/(.*\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|tt
                 return False
             else:
                 logger.error(f"💥 Nginx 리로드 중 오류 발생: {str(e)}")
-                raise
+                return False
 
     async def test_nginx_config(self) -> bool:
         """Nginx 설정 파일 유효성 검사"""
@@ -640,14 +640,14 @@ location ~ ^/{{ subdomain }}/(.*\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|tt
                 if not nginx_reloaded:
                     logger.warning("⚠️ Nginx 리로드 실패")
 
-            return {
-                "success": True,
-                "message": f"검증 완료. {len(removed_files)}개 문제 파일 삭제됨",
-                "total_checked": len(app_configs),
-                "removed_files": removed_files,
-                "validation_results": validation_results,
-                "nginx_reloaded": nginx_reloaded,
-            }
+                return {
+                    "success": True,
+                    "message": f"검증 완료. {len(removed_files)}개 문제 파일 삭제됨",
+                    "total_checked": len(app_configs),
+                    "removed_files": removed_files,
+                    "validation_results": validation_results,
+                    "nginx_reloaded": nginx_reloaded,
+                }
 
         except Exception as e:
             logger.error(f"❌ 설정 파일 검증 및 정리 실패: {str(e)}")

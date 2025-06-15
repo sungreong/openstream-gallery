@@ -191,8 +191,23 @@ async def deploy_app_background(app_id: int, db: Session, env_vars: dict = None)
 
 @router.get("/", response_model=List[AppResponse])
 async def get_apps(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """사용자의 앱 목록 조회"""
+    """사용자의 앱 목록 조회 (자신의 앱 + 공개 앱)"""
+    # 자신의 앱과 공개 앱을 모두 조회
+    apps = db.query(App).filter((App.user_id == current_user.id) | (App.is_public == True)).all()
+    return apps
+
+
+@router.get("/my-apps", response_model=List[AppResponse])
+async def get_my_apps(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """내가 만든 앱만 조회"""
     apps = db.query(App).filter(App.user_id == current_user.id).all()
+    return apps
+
+
+@router.get("/public-apps", response_model=List[AppResponse])
+async def get_public_apps(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """공개 앱만 조회"""
+    apps = db.query(App).filter(App.is_public == True).all()
     return apps
 
 

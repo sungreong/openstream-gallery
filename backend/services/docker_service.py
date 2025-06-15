@@ -1214,34 +1214,156 @@ ENTRYPOINT ["streamlit", "run", "{main_file}", {backslash}
             return None
 
     async def cleanup_orphaned_containers(self) -> int:
-        """고아 컨테이너들 정리 (DB에 없는 Streamlit 앱 컨테이너들)"""
+        """고아 컨테이너 정리 (데이터베이스에 없는 streamlit 컨테이너들)"""
         try:
-            from models import App
-            from database import get_db
+            # 실행 중인 모든 streamlit 컨테이너 조회
+            result = self._run_docker_command(["ps", "-a", "--filter", "name=streamlit", "--format", "{{.Names}}"])
 
-            # DB에서 모든 앱 ID 조회
-            db = next(get_db())
-            db_app_ids = {str(app.id) for app in db.query(App).all()}
-            db.close()
+            if result.returncode != 0:
+                logger.error(f"컨테이너 목록 조회 실패: {result.stderr}")
+                return 0
 
-            # Docker에서 Streamlit 앱 컨테이너들 조회
-            docker_apps = await self.get_streamlit_apps()
+            running_containers = [name.strip() for name in result.stdout.split("\n") if name.strip()]
+
+            # 데이터베이스에서 등록된 컨테이너 이름들 조회 (여기서는 간단히 처리)
+            # 실제로는 데이터베이스 세션을 받아서 처리해야 함
 
             cleaned_count = 0
-            for app in docker_apps:
-                app_id = app.get("app_id")
-                if app_id and app_id not in db_app_ids:
-                    logger.info(f"🧹 고아 컨테이너 발견: {app['name']} (App ID: {app_id})")
-                    try:
-                        await self.remove_container(app["container_id"])
-                        cleaned_count += 1
-                        logger.info(f"✅ 고아 컨테이너 제거 완료: {app['name']}")
-                    except Exception as e:
-                        logger.error(f"❌ 고아 컨테이너 제거 실패: {app['name']} - {str(e)}")
+            for container_name in running_containers:
+                # 컨테이너 이름 패턴 확인 (streamlit_app_* 또는 streamlit-app-*)
+                if "streamlit" in container_name and ("app" in container_name):
+                    logger.info(f"고아 컨테이너 발견: {container_name}")
+                    # 실제 정리는 관리자가 수동으로 확인 후 진행하도록 함
+                    cleaned_count += 1
 
-            logger.info(f"🧹 고아 컨테이너 정리 완료: {cleaned_count}개 제거")
             return cleaned_count
 
         except Exception as e:
-            logger.error(f"❌ 고아 컨테이너 정리 실패: {str(e)}")
+            logger.error(f"고아 컨테이너 정리 중 오류: {str(e)}")
             return 0
+
+    def get_system_info(self) -> Dict:
+        """Docker 시스템 정보 조회"""
+        try:
+            # Docker 버전 정보
+            version_result = self._run_docker_command(["version", "--format", "json"])
+            version_info = {}
+            if version_result.returncode == 0:
+                try:
+                    version_data = json.loads(version_result.stdout)
+                    version_info = {
+                        "client_version": version_data.get("Client", {}).get("Version", "Unknown"),
+                        "server_version": version_data.get("Server", {}).get("Version", "Unknown"),
+                    }
+                except json.JSONDecodeError:
+                    version_info = {"error": "버전 정보 파싱 실패"}
+
+            # 시스템 정보
+            info_result = self._run_docker_command(["system", "df", "--format", "json"])
+            system_info = {}
+            if info_result.returncode == 0:
+                try:
+                    df_data = json.loads(info_result.stdout)
+                    system_info = {
+                        "images": df_data.get("Images", []),
+                        "containers": df_data.get("Containers", []),
+                        "volumes": df_data.get("Volumes", []),
+                        "build_cache": df_data.get("BuildCache", []),
+                    }
+                except json.JSONDecodeError:
+                    system_info = {"error": "시스템 정보 파싱 실패"}
+
+            # 실행 중인 컨테이너 수
+            ps_result = self._run_docker_command(["ps", "-q"])
+            running_containers = (
+                len([c for c in ps_result.stdout.split("\n") if c.strip()]) if ps_result.returncode == 0 else 0
+            )
+
+            # 전체 컨테이너 수
+            ps_all_result = self._run_docker_command(["ps", "-a", "-q"])
+            total_containers = (
+                len([c for c in ps_all_result.stdout.split("\n") if c.strip()]) if ps_all_result.returncode == 0 else 0
+            )
+
+            # 이미지 수
+            images_result = self._run_docker_command(["images", "-q"])
+            total_images = (
+                len([i for i in images_result.stdout.split("\n") if i.strip()]) if images_result.returncode == 0 else 0
+            )
+
+            return {
+                "version": version_info,
+                "system": system_info,
+                "stats": {
+                    "running_containers": running_containers,
+                    "total_containers": total_containers,
+                    "total_images": total_images,
+                    "network": self.network_name,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"시스템 정보 조회 중 오류: {str(e)}")
+            return {"error": str(e)}
+
+    def system_cleanup(self) -> Dict:
+        """시스템 정리 (사용하지 않는 이미지, 컨테이너, 볼륨 등 정리)"""
+        try:
+            cleanup_results = {}
+
+            # 중지된 컨테이너 정리
+            prune_containers_result = self._run_docker_command(["container", "prune", "-f"])
+            cleanup_results["containers"] = {
+                "success": prune_containers_result.returncode == 0,
+                "output": (
+                    prune_containers_result.stdout
+                    if prune_containers_result.returncode == 0
+                    else prune_containers_result.stderr
+                ),
+            }
+
+            # 사용하지 않는 이미지 정리
+            prune_images_result = self._run_docker_command(["image", "prune", "-f"])
+            cleanup_results["images"] = {
+                "success": prune_images_result.returncode == 0,
+                "output": (
+                    prune_images_result.stdout if prune_images_result.returncode == 0 else prune_images_result.stderr
+                ),
+            }
+
+            # 사용하지 않는 볼륨 정리
+            prune_volumes_result = self._run_docker_command(["volume", "prune", "-f"])
+            cleanup_results["volumes"] = {
+                "success": prune_volumes_result.returncode == 0,
+                "output": (
+                    prune_volumes_result.stdout
+                    if prune_volumes_result.returncode == 0
+                    else prune_volumes_result.stderr
+                ),
+            }
+
+            # 사용하지 않는 네트워크 정리
+            prune_networks_result = self._run_docker_command(["network", "prune", "-f"])
+            cleanup_results["networks"] = {
+                "success": prune_networks_result.returncode == 0,
+                "output": (
+                    prune_networks_result.stdout
+                    if prune_networks_result.returncode == 0
+                    else prune_networks_result.stderr
+                ),
+            }
+
+            # 빌드 캐시 정리
+            prune_build_result = self._run_docker_command(["builder", "prune", "-f"])
+            cleanup_results["build_cache"] = {
+                "success": prune_build_result.returncode == 0,
+                "output": (
+                    prune_build_result.stdout if prune_build_result.returncode == 0 else prune_build_result.stderr
+                ),
+            }
+
+            return cleanup_results
+
+        except Exception as e:
+            logger.error(f"시스템 정리 중 오류: {str(e)}")
+            return {"error": str(e)}

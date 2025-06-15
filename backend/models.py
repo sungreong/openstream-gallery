@@ -11,6 +11,7 @@ class User(Base):
     username = Column(String(50), unique=True, index=True, nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -40,6 +41,7 @@ class App(Base):
     build_task_id = Column(String(100))  # Celery 빌드 태스크 ID
     deploy_task_id = Column(String(100))  # Celery 배포 태스크 ID
     stop_task_id = Column(String(100))  # Celery 중지 태스크 ID
+    is_public = Column(Boolean, default=False, nullable=False)  # 공개 앱 여부
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     last_deployed_at = Column(DateTime(timezone=True))
