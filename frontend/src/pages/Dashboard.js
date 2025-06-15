@@ -33,7 +33,12 @@ import {
   Badge,
   useMediaQuery,
   useTheme,
-  Collapse
+  Collapse,
+  Checkbox,
+  Toolbar,
+  FormControlLabel,
+  Switch,
+  Divider
 } from '@mui/material';
 import { 
   PlayArrow, 
@@ -53,7 +58,10 @@ import {
   OpenInNew,
   Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  SelectAll,
+  ClearAll,
+  AdminPanelSettings
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -82,6 +90,11 @@ const Dashboard = () => {
   const [lastStatusCheck, setLastStatusCheck] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [dockerSectionExpanded, setDockerSectionExpanded] = useState(false);
+  
+  // 일괄 관리 관련 상태
+  const [bulkManageMode, setBulkManageMode] = useState(false);
+  const [selectedApps, setSelectedApps] = useState(new Set());
+  const [bulkActionDialog, setBulkActionDialog] = useState({ open: false, action: '', apps: [] });
   
   // 반응형 및 인증 관련
   const theme = useTheme();
@@ -348,6 +361,89 @@ const Dashboard = () => {
     toast.success('상태를 새로고침했습니다.');
   };
 
+  // 일괄 관리 관련 함수들
+  const handleBulkModeToggle = () => {
+    setBulkManageMode(!bulkManageMode);
+    setSelectedApps(new Set());
+  };
+
+  const handleAppSelect = (appId, checked) => {
+    const newSelected = new Set(selectedApps);
+    if (checked) {
+      newSelected.add(appId);
+    } else {
+      newSelected.delete(appId);
+    }
+    setSelectedApps(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedApps.size === apps.length) {
+      setSelectedApps(new Set());
+    } else {
+      setSelectedApps(new Set(apps.map(app => app.id)));
+    }
+  };
+
+  const handleBulkAction = (action) => {
+    const selectedAppList = apps.filter(app => selectedApps.has(app.id));
+    setBulkActionDialog({ 
+      open: true, 
+      action, 
+      apps: selectedAppList 
+    });
+  };
+
+  // 일괄 중지 뮤테이션
+  const bulkStopMutation = useMutation({
+    mutationFn: async (appIds) => {
+      const promises = appIds.map(appId => 
+        axios.post(`/api/apps/${appId}/stop`)
+      );
+      return Promise.all(promises);
+    },
+    onSuccess: () => {
+      toast.success(`${selectedApps.size}개 앱이 중지되었습니다.`);
+      queryClient.invalidateQueries({ queryKey: ['apps'] });
+      setSelectedApps(new Set());
+      setBulkManageMode(false);
+    },
+    onError: (error) => {
+      toast.error('일부 앱 중지에 실패했습니다.');
+    },
+  });
+
+  // 일괄 삭제 뮤테이션
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (appIds) => {
+      const promises = appIds.map(appId => 
+        axios.delete(`/api/apps/${appId}`)
+      );
+      return Promise.all(promises);
+    },
+    onSuccess: () => {
+      toast.success(`${selectedApps.size}개 앱이 삭제되었습니다.`);
+      queryClient.invalidateQueries({ queryKey: ['apps'] });
+      setSelectedApps(new Set());
+      setBulkManageMode(false);
+    },
+    onError: (error) => {
+      toast.error('일부 앱 삭제에 실패했습니다.');
+    },
+  });
+
+  const handleBulkActionConfirm = () => {
+    const appIds = Array.from(selectedApps);
+    
+    if (bulkActionDialog.action === 'stop') {
+      bulkStopMutation.mutate(appIds);
+    } else if (bulkActionDialog.action === 'delete') {
+      bulkDeleteMutation.mutate(appIds);
+    }
+    
+    setBulkActionDialog({ open: false, action: '', apps: [] });
+  };
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" mt={4}>
@@ -387,6 +483,23 @@ const Dashboard = () => {
           >
             새로고침
           </Button>
+          {isAdmin && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={bulkManageMode}
+                  onChange={handleBulkModeToggle}
+                  color="secondary"
+                />
+              }
+              label={
+                <Box display="flex" alignItems="center" gap={0.5}>
+                  <AdminPanelSettings fontSize="small" />
+                  <Typography variant="body2">일괄 관리</Typography>
+                </Box>
+              }
+            />
+          )}
           <Button
             variant="contained"
             startIcon={<Add />}
@@ -396,6 +509,66 @@ const Dashboard = () => {
           </Button>
         </Stack>
       </Box>
+
+      {/* 일괄 관리 툴바 */}
+      {isAdmin && bulkManageMode && (
+        <Card sx={{ mb: 3, bgcolor: 'action.hover' }}>
+          <Toolbar>
+            <Box display="flex" alignItems="center" gap={2} width="100%">
+              <Box display="flex" alignItems="center" gap={1}>
+                <Checkbox
+                  indeterminate={selectedApps.size > 0 && selectedApps.size < apps.length}
+                  checked={apps.length > 0 && selectedApps.size === apps.length}
+                  onChange={handleSelectAll}
+                />
+                <Typography variant="subtitle1">
+                  {selectedApps.size > 0 
+                    ? `${selectedApps.size}개 앱 선택됨` 
+                    : '앱 선택'
+                  }
+                </Typography>
+              </Box>
+              
+              <Divider orientation="vertical" flexItem />
+              
+              <Box display="flex" gap={1}>
+                <Button
+                  variant="outlined"
+                  startIcon={<SelectAll />}
+                  onClick={handleSelectAll}
+                  size="small"
+                >
+                  {selectedApps.size === apps.length ? '전체 해제' : '전체 선택'}
+                </Button>
+                
+                {selectedApps.size > 0 && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Stop />}
+                      onClick={() => handleBulkAction('stop')}
+                      disabled={bulkStopMutation.isPending}
+                      size="small"
+                    >
+                      일괄 중지
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Delete />}
+                      onClick={() => handleBulkAction('delete')}
+                      disabled={bulkDeleteMutation.isPending}
+                      color="error"
+                      size="small"
+                    >
+                      일괄 삭제
+                    </Button>
+                  </>
+                )}
+              </Box>
+            </Box>
+          </Toolbar>
+        </Card>
+      )}
 
       {/* 통계 카드들 - 반응형 레이아웃 */}
       <Grid container spacing={isMobile ? 2 : 3} sx={{ mb: 4 }}>
@@ -699,25 +872,44 @@ const Dashboard = () => {
           {apps.map((app) => {
             const statusInfo = getActualStatusInfo(app);
             const realtimeInfo = realtimeStatus[app.id];
+            const isSelected = selectedApps.has(app.id);
             
             return (
               <Grid item xs={12} sm={6} md={isTablet ? 6 : 4} key={app.id}>
-                <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <Card 
+                  sx={{ 
+                    height: '100%', 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    border: isSelected ? 2 : 1,
+                    borderColor: isSelected ? 'primary.main' : 'divider',
+                    bgcolor: isSelected ? 'action.selected' : 'background.paper'
+                  }}
+                >
                   <CardContent sx={{ flexGrow: 1 }}>
                     <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
-                      <Box>
-                        <Typography variant="h6" component="h3">
-                          {app.name}
-                        </Typography>
-                        {app.is_public && (
-                          <Chip
-                            label="공개 앱"
-                            color="info"
-                            size="small"
-                            variant="outlined"
-                            sx={{ mt: 0.5 }}
+                      <Box display="flex" alignItems="flex-start" gap={1}>
+                        {isAdmin && bulkManageMode && (
+                          <Checkbox
+                            checked={isSelected}
+                            onChange={(e) => handleAppSelect(app.id, e.target.checked)}
+                            sx={{ p: 0, mt: 0.5 }}
                           />
                         )}
+                        <Box>
+                          <Typography variant="h6" component="h3">
+                            {app.name}
+                          </Typography>
+                          {app.is_public && (
+                            <Chip
+                              label="공개 앱"
+                              color="info"
+                              size="small"
+                              variant="outlined"
+                              sx={{ mt: 0.5 }}
+                            />
+                          )}
+                        </Box>
                       </Box>
                       <Stack direction="row" spacing={1} alignItems="center">
                         <Badge
@@ -790,35 +982,39 @@ const Dashboard = () => {
                         열기
                       </Button>
                     )}
-                    {statusInfo.text === '중지됨' && (
-                      <Button
-                        size="small"
-                        startIcon={<PlayArrow />}
-                        onClick={() => handleDeploy(app.id)}
-                        disabled={deployMutation.isPending}
-                      >
-                        배포
-                      </Button>
+                    {!bulkManageMode && (
+                      <>
+                        {statusInfo.text === '중지됨' && (
+                          <Button
+                            size="small"
+                            startIcon={<PlayArrow />}
+                            onClick={() => handleDeploy(app.id)}
+                            disabled={deployMutation.isPending}
+                          >
+                            배포
+                          </Button>
+                        )}
+                        {(statusInfo.text === '실행중' || realtimeInfo?.container_running) && (
+                          <Button
+                            size="small"
+                            startIcon={<Stop />}
+                            onClick={() => handleStop(app.id)}
+                            disabled={stopMutation.isPending}
+                          >
+                            중지
+                          </Button>
+                        )}
+                        <Button
+                          size="small"
+                          startIcon={<Delete />}
+                          onClick={() => handleDelete(app)}
+                          disabled={deleteMutation.isPending}
+                          color="error"
+                        >
+                          삭제
+                        </Button>
+                      </>
                     )}
-                    {(statusInfo.text === '실행중' || realtimeInfo?.container_running) && (
-                      <Button
-                        size="small"
-                        startIcon={<Stop />}
-                        onClick={() => handleStop(app.id)}
-                        disabled={stopMutation.isPending}
-                      >
-                        중지
-                      </Button>
-                    )}
-                    <Button
-                      size="small"
-                      startIcon={<Delete />}
-                      onClick={() => handleDelete(app)}
-                      disabled={deleteMutation.isPending}
-                      color="error"
-                    >
-                      삭제
-                    </Button>
                   </CardActions>
                 </Card>
               </Grid>
@@ -903,6 +1099,61 @@ const Dashboard = () => {
           </Button>
           <Button onClick={handleDeleteConfirm} color="error" variant="contained">
             삭제
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 일괄 작업 확인 다이얼로그 */}
+      <Dialog 
+        open={bulkActionDialog.open} 
+        onClose={() => setBulkActionDialog({ open: false, action: '', apps: [] })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {bulkActionDialog.action === 'stop' ? '일괄 중지 확인' : '일괄 삭제 확인'}
+        </DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            다음 {bulkActionDialog.apps.length}개의 앱을 
+            {bulkActionDialog.action === 'stop' ? ' 중지' : ' 삭제'}하시겠습니까?
+          </Typography>
+          
+          <Box sx={{ mt: 2, maxHeight: 200, overflowY: 'auto' }}>
+            {bulkActionDialog.apps.map((app, index) => (
+              <Box key={app.id} display="flex" alignItems="center" gap={1} mb={1}>
+                <Typography variant="body2" fontWeight="bold">
+                  {index + 1}.
+                </Typography>
+                <Typography variant="body2">
+                  {app.name}
+                </Typography>
+                <Chip
+                  label={getActualStatusInfo(app).text}
+                  color={getActualStatusInfo(app).color}
+                  size="small"
+                />
+              </Box>
+            ))}
+          </Box>
+          
+          {bulkActionDialog.action === 'delete' && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              삭제된 앱은 복구할 수 없습니다. 신중히 확인해주세요.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkActionDialog({ open: false, action: '', apps: [] })}>
+            취소
+          </Button>
+          <Button 
+            onClick={handleBulkActionConfirm} 
+            color={bulkActionDialog.action === 'delete' ? 'error' : 'warning'}
+            variant="contained"
+            disabled={bulkStopMutation.isPending || bulkDeleteMutation.isPending}
+          >
+            {bulkActionDialog.action === 'stop' ? '중지 확인' : '삭제 확인'}
           </Button>
         </DialogActions>
       </Dialog>
